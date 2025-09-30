@@ -14,10 +14,9 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog"
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast"
-import { findDuplicateFiles } from '@/app/actions';
+import { findDuplicateGroupsLocally } from '@/lib/local-analyzer';
 import { FolderSearch, FileScan, Trash2, Loader2, Music2, Folder, AlertTriangle, Info, FolderPlus } from 'lucide-react';
 import type { AppFile, DuplicateGroupWithSelection } from '@/lib/types';
 import { Logo } from './logo';
@@ -92,28 +91,24 @@ export default function AudioDedupe() {
       return;
     }
     
-    startTransition(async () => {
+    startTransition(() => {
       setAnalysisRan(true);
-      setLoadingMessage('Dosyalar yapay zeka ile analiz ediliyor... Bu işlem büyük kütüphanelerde zaman alabilir.');
+      setLoadingMessage('Dosyalar analiz ediliyor... Bu işlem yerel olarak yapılıyor ve büyük kütüphanelerde zaman alabilir.');
       setError(null);
       try {
-        const input = { fileList: files.map(f => ({ filePath: f.path })) };
-        const result = await findDuplicateFiles(input);
+        const filePaths = files.map(f => f.path);
+        const result = findDuplicateGroupsLocally(filePaths);
 
-        if (result.success && result.data) {
-          const groupsWithSelection = result.data.duplicateGroups
-            .filter(g => g.files.length > 1)
-            .map((group, index) => {
-              const selection = new Set(group.files.slice(1));
-              return { ...group, id: `group-${index}`, selection };
-            });
-          setDuplicateGroups(groupsWithSelection);
-          if (groupsWithSelection.length === 0) {
-              toast({ title: "Kopya bulunamadı", description: "Yapay zeka analizi tamamlandı ancak yinelenen grup tespit edilmedi." });
-          }
-        } else {
-           // This case may not be reached if the action throws an error
-          setError( 'Analiz sırasında bilinmeyen bir hata oluştu.');
+        const groupsWithSelection = result
+          .filter(g => g.files.length > 1)
+          .map((group, index) => {
+            const selection = new Set(group.files.slice(1));
+            return { ...group, id: `group-${index}`, selection };
+          });
+
+        setDuplicateGroups(groupsWithSelection);
+        if (groupsWithSelection.length === 0) {
+            toast({ title: "Kopya bulunamadı", description: "Yerel analiz tamamlandı ancak yinelenen grup tespit edilmedi." });
         }
       } catch (e) {
           if (e instanceof Error) {
@@ -347,7 +342,7 @@ export default function AudioDedupe() {
       <header className="text-center space-y-2 pt-8">
         <Logo />
         <p className="text-muted-foreground">
-        Yapay zekanın gücüyle kütüphanenizdeki yinelenen ses dosyalarını bulun ve kaldırın.
+        Kütüphanenizdeki yinelenen ses dosyalarını yerel olarak bulun ve kaldırın.
         </p>
       </header>
       <main className="w-full">

@@ -1,5 +1,3 @@
-import type { AutoGroupDuplicatesOutput } from '@/ai/flows/auto-group-duplicates';
-
 export type AppFile = {
   handle: FileSystemFileHandle;
   parentHandle: FileSystemDirectoryHandle;
@@ -7,10 +5,13 @@ export type AppFile = {
   path: string;
 };
 
-export type DuplicateGroup = AutoGroupDuplicatesOutput['duplicateGroups'][0];
+export type DuplicateGroup = {
+  files: string[];
+  reason: string;
+  similarityScore: number;
+};
 
 export type DuplicateGroupWithSelection = DuplicateGroup & {
   id: string;
   selection: Set<string>;
-  similarityScore?: number;
 };
