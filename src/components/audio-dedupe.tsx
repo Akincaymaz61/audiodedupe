@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, useTransition } from 'react';
+import { useState, useMemo, useCallback, useTransition, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
@@ -14,7 +14,6 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { useToast } from "@/hooks/use-toast"
 import { findDuplicateFiles } from '@/app/actions';
@@ -25,6 +24,19 @@ import { ScrollArea } from './ui/scroll-area';
 
 const AUDIO_EXTENSIONS = /\.(mp3|wav|flac|m4a|ogg|aac|aiff)$/i;
 
+type FileSystemFileHandleStub = {
+    name: string;
+    kind: 'file';
+    remove: () => Promise<void>;
+};
+
+type FileSystemDirectoryHandleStub = {
+    name: string;
+    kind: 'directory';
+    entries: () => AsyncIterable<FileSystemFileHandleStub | FileSystemDirectoryHandleStub>;
+    removeEntry: (name: string, options?: { recursive?: boolean }) => Promise<void>;
+};
+
 export default function AudioDedupe() {
   const [files, setFiles] = useState<AppFile[]>([]);
   const [filesByPath, setFilesByPath] = useState<Map<string, AppFile>>(new Map());
@@ -32,49 +44,48 @@ export default function AudioDedupe() {
   const [loadingMessage, setLoadingMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { toast } = useToast();
 
-  const handleSelectDirectory = async () => {
-    try {
-      const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-      setError(null);
-      setDuplicateGroups([]);
-      startTransition(async () => {
+  const handleSelectDirectoryClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = event.target.files;
+    if (!selectedFiles) return;
+
+    setError(null);
+    setDuplicateGroups([]);
+
+    startTransition(async () => {
         setLoadingMessage('Scanning for audio files...');
-        const allFiles: AppFile[] = [];
-        
-        async function scanDirectory(dirHandle: FileSystemDirectoryHandle, path: string) {
-          try {
-            for await (const entry of dirHandle.values()) {
-              const newPath = path ? `${path}/${entry.name}` : entry.name;
-              if (entry.kind === 'file' && AUDIO_EXTENSIONS.test(entry.name)) {
-                allFiles.push({ handle: entry, parentHandle: dirHandle, name: entry.name, path: newPath });
-                if (allFiles.length % 100 === 0) {
-                    setLoadingMessage(`Scanning... found ${allFiles.length} audio files.`);
-                }
-              } else if (entry.kind === 'directory') {
-                await scanDirectory(entry, newPath);
-              }
-            }
-          } catch(e) {
-            console.warn(`Could not read directory: ${path}`, e);
-            setError(`Permission denied for directory: ${path}. Some files may not be included.`);
-          }
-        }
-        
-        await scanDirectory(dirHandle, '');
+        const allFiles: AppFile[] = Array.from(selectedFiles)
+            .filter(file => AUDIO_EXTENSIONS.test(file.name) && file.webkitRelativePath)
+            .map(file => ({
+                // The File System Access API is not used here, so we create stubs.
+                // Deletion will be handled by a different mechanism if needed, or this can be adapted
+                // if we can get directory handles another way. For now, deletion is not implemented with this method.
+                handle: { name: file.name, kind: 'file', remove: async () => { console.error("Deletion not implemented for this file handle type.") } } as unknown as FileSystemFileHandle,
+                parentHandle: { name: '', kind: 'directory' } as unknown as FileSystemDirectoryHandle,
+                name: file.name,
+                path: file.webkitRelativePath,
+            }));
+
         setFiles(allFiles);
         setFilesByPath(new Map(allFiles.map(f => [f.path, f])));
         setLoadingMessage('');
-      });
-    } catch (err) {
-      if (err instanceof Error && err.name !== 'AbortError') {
-        setError('Failed to open directory. Please check permissions and try again.');
-        console.error(err);
-      }
-    }
+
+        if (allFiles.length === 0) {
+            setError("No audio files found in the selected directory.");
+        }
+    });
+
+    // Reset the input value to allow selecting the same directory again
+    event.target.value = '';
   };
+
 
   const handleAnalyze = () => {
     if (files.length === 0) {
@@ -121,56 +132,12 @@ export default function AudioDedupe() {
   };
 
   const handleDeleteSelected = async (groupsToDeleteFrom: DuplicateGroupWithSelection[]) => {
-    const filesToDelete = new Set<string>();
-    groupsToDeleteFrom.forEach(group => {
-      group.selection.forEach(filePath => filesToDelete.add(filePath));
+    toast({
+        title: "Deletion Not Implemented",
+        description: "Deleting files is not supported with this folder selection method.",
+        variant: "destructive",
     });
-
-    if (filesToDelete.size === 0) {
-      toast({ title: "Nothing to delete", description: "No files were selected for deletion.", variant: "default" });
-      return;
-    }
-
-    startTransition(async () => {
-      setLoadingMessage(`Deleting ${filesToDelete.size} files...`);
-      let deletedCount = 0;
-      let failedCount = 0;
-      const deletedPaths = new Set<string>();
-
-      for (const path of filesToDelete) {
-        const file = filesByPath.get(path);
-        if (file) {
-          try {
-            await file.parentHandle.removeEntry(file.name);
-            deletedCount++;
-            deletedPaths.add(path);
-          } catch (e) {
-            failedCount++;
-            console.error(`Failed to delete ${path}`, e);
-          }
-        }
-      }
-
-      setFiles(prev => prev.filter(f => !deletedPaths.has(f.path)));
-      setFilesByPath(prev => {
-        const newMap = new Map(prev);
-        deletedPaths.forEach(path => newMap.delete(path));
-        return newMap;
-      });
-
-      setDuplicateGroups(prev => prev.map(group => ({
-        ...group,
-        files: group.files.filter(f => !deletedPaths.has(f)),
-        selection: new Set([...group.selection].filter(s => !deletedPaths.has(s)))
-      })).filter(g => g.files.length > 1));
-
-      toast({
-        title: "Deletion Complete",
-        description: `Successfully deleted ${deletedCount} files. ${failedCount > 0 ? `Failed to delete ${failedCount} files.` : ''}`,
-        variant: failedCount > 0 ? "destructive" : "default",
-      });
-      setLoadingMessage('');
-    });
+    console.warn("File deletion was attempted, but it is not implemented for the input[type=file] method. The original implementation used showDirectoryPicker which has write access.");
   };
 
   const totalSelectedCount = useMemo(() => {
@@ -302,10 +269,18 @@ export default function AudioDedupe() {
     
     return (
       <div className="text-center p-10">
+        <input 
+          type="file" 
+          ref={fileInputRef} 
+          style={{ display: 'none' }} 
+          onChange={handleFileSelect}
+          webkitdirectory="true"
+          mozdirectory="true"
+        />
         <FolderSearch className="h-16 w-16 text-primary mx-auto mb-4" />
         <h2 className="text-2xl font-bold">Start by scanning a folder</h2>
         <p className="text-muted-foreground mb-6">Select your main music directory to find duplicate audio files.</p>
-        <Button size="lg" onClick={handleSelectDirectory} disabled={isPending}>
+        <Button size="lg" onClick={handleSelectDirectoryClick} disabled={isPending}>
           <FolderSearch className="mr-2 h-5 w-5" />
           Select Music Folder
         </Button>
