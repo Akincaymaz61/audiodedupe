@@ -18,10 +18,11 @@ import {
 } from "@/components/ui/alert-dialog"
 import { useToast } from "@/hooks/use-toast"
 import { findDuplicateFiles } from '@/app/actions';
-import { FolderSearch, FileScan, Trash2, Loader2, Music2, Folder, AlertTriangle, Info } from 'lucide-react';
-import type { AppFile, DuplicateGroup, DuplicateGroupWithSelection } from '@/lib/types';
+import { FolderSearch, FileScan, Trash2, Loader2, Music2, Folder, AlertTriangle, Info, FolderPlus } from 'lucide-react';
+import type { AppFile, DuplicateGroupWithSelection } from '@/lib/types';
 import { Logo } from './logo';
 import { ScrollArea } from './ui/scroll-area';
+import { Badge } from './ui/badge';
 
 const AUDIO_EXTENSIONS = /\.(mp3|wav|flac|m4a|ogg|aac|aiff)$/i;
 
@@ -42,32 +43,39 @@ export default function AudioDedupe() {
 
   const processFiles = useCallback((selectedFiles: FileList) => {
     setError(null);
-    setDuplicateGroups([]);
-    setAnalysisRan(false);
 
     startTransition(() => {
         setLoadingMessage('Audiodateien werden gesucht...');
-        const allFiles: AppFile[] = [];
+        const newFiles: AppFile[] = [];
         for (let i = 0; i < selectedFiles.length; i++) {
             const file = selectedFiles[i];
             if (AUDIO_EXTENSIONS.test(file.name) && file.webkitRelativePath) {
-                allFiles.push({
+              const filePath = file.webkitRelativePath;
+              // Sadece daha önce eklenmemiş dosyaları ekle
+              if (!files.some(f => f.path === filePath) && !newFiles.some(f => f.path === filePath)) {
+                newFiles.push({
                     handle: { name: file.name, kind: 'file', remove: async () => { console.error("Deletion not implemented for this file handle type.") } } as unknown as FileSystemFileHandle,
                     parentHandle: { name: '', kind: 'directory' } as unknown as FileSystemDirectoryHandle,
                     name: file.name,
                     path: file.webkitRelativePath,
                 });
+              }
             }
         }
 
-        setFiles(allFiles);
+        if (newFiles.length > 0) {
+          setFiles(prevFiles => [...prevFiles, ...newFiles]);
+          setDuplicateGroups([]);
+          setAnalysisRan(false);
+        }
+        
         setLoadingMessage('');
 
-        if (allFiles.length === 0) {
-            setError("Im ausgewählten Verzeichnis wurden keine Audiodateien gefunden.");
+        if (files.length + newFiles.length === 0) {
+            setError("Seçilen dizinde ses dosyası bulunamadı.");
         }
     });
-  }, []);
+  }, [files]);
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = event.target.files;
@@ -80,12 +88,12 @@ export default function AudioDedupe() {
 
   const handleAnalyze = () => {
     if (files.length === 0) {
-      setError('Keine Dateien zum Analysieren. Bitte wählen Sie zuerst einen Ordner aus.');
+      setError('Analiz edilecek dosya yok. Lütfen önce bir klasör seçin.');
       return;
     }
     setAnalysisRan(true);
     startTransition(async () => {
-      setLoadingMessage('Dateien werden mit KI analysiert... Dies kann bei großen Bibliotheken eine Weile dauern.');
+      setLoadingMessage('Dosyalar yapay zeka ile analiz ediliyor... Bu işlem büyük kütüphanelerde zaman alabilir.');
       setError(null);
       const input = { fileList: files.map(f => ({ filePath: f.path })) };
       const result = await findDuplicateFiles(input);
@@ -99,10 +107,10 @@ export default function AudioDedupe() {
           });
         setDuplicateGroups(groupsWithSelection);
         if (groupsWithSelection.length === 0) {
-            toast({ title: "Keine Duplikate gefunden", description: "Die KI-Analyse wurde abgeschlossen, aber es wurden keine doppelten Gruppen identifiziert." });
+            toast({ title: "Kopya bulunamadı", description: "Yapay zeka analizi tamamlandı ancak yinelenen grup tespit edilmedi." });
         }
       } else {
-        setError(result.error || 'Bei der Analyse ist ein unbekannter Fehler aufgetreten.');
+        setError(result.error || 'Analiz sırasında bilinmeyen bir hata oluştu.');
       }
       setLoadingMessage('');
     });
@@ -125,8 +133,8 @@ export default function AudioDedupe() {
 
   const handleDeleteSelected = async (groupsToDeleteFrom: DuplicateGroupWithSelection[]) => {
     toast({
-        title: "Löschen nicht implementiert",
-        description: "Das Löschen von Dateien wird mit dieser Ordnere-Auswahlmethode nicht unterstützt.",
+        title: "Silme işlemi uygulanamadı",
+        description: "Bu klasör seçim yöntemiyle dosya silme desteklenmiyor.",
         variant: "destructive",
     });
     console.warn("File deletion was attempted, but it is not implemented for the input[type=file] method. The original implementation used showDirectoryPicker which has write access.");
@@ -140,7 +148,7 @@ export default function AudioDedupe() {
     <div className="flex flex-col items-center justify-center text-center p-10 h-64">
       <Loader2 className="h-12 w-12 animate-spin text-primary mb-4" />
       <p className="text-lg font-semibold">{loadingMessage}</p>
-      <p className="text-muted-foreground">Bitte warten...</p>
+      <p className="text-muted-foreground">Lütfen bekleyin...</p>
     </div>
   );
 
@@ -152,28 +160,34 @@ export default function AudioDedupe() {
         <div className="space-y-6">
             <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                 <div>
-                    <h2 className="text-2xl font-bold tracking-tight">Duplikate überprüfen</h2>
-                    <p className="text-muted-foreground">{duplicateGroups.length} Gruppen ähnlicher Audiodateien gefunden.</p>
+                    <h2 className="text-2xl font-bold tracking-tight">Kopyaları İncele</h2>
+                    <p className="text-muted-foreground">{duplicateGroups.length} grup benzer ses dosyası bulundu.</p>
                 </div>
-                <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                       <Button variant="destructive" disabled={totalSelectedCount === 0 || isPending}>
-                         <Trash2 className="mr-2 h-4 w-4" /> Alle ausgewählten löschen ({totalSelectedCount})
-                       </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                        <AlertDialogHeader>
-                            <AlertDialogTitle>Sind Sie sich absolut sicher?</AlertDialogTitle>
-                            <AlertDialogDescription>
-                                Dadurch werden {totalSelectedCount} Datei(en) dauerhaft gelöscht. Diese Aktion kann nicht rückgängig gemacht werden.
-                            </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                            <AlertDialogCancel>Abbrechen</AlertDialogCancel>
-                            <AlertDialogAction onClick={() => handleDeleteSelected(duplicateGroups)} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">Löschen</AlertDialogAction>
-                        </AlertDialogFooter>
-                    </AlertDialogContent>
-                </AlertDialog>
+                 <div className="flex gap-2">
+                    <Button variant="outline" onClick={handleSelectDirectoryClick}>
+                        <FolderPlus className="mr-2 h-4 w-4" />
+                        Daha Fazla Klasör Ekle
+                    </Button>
+                    <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                           <Button variant="destructive" disabled={totalSelectedCount === 0 || isPending}>
+                             <Trash2 className="mr-2 h-4 w-4" /> Seçilenlerin Tümünü Sil ({totalSelectedCount})
+                           </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                            <AlertDialogHeader>
+                                <AlertDialogTitle>Emin misiniz?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                    Bu işlem {totalSelectedCount} dosyayı kalıcı olarak silecektir. Bu eylem geri alınamaz.
+                                </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                                <AlertDialogCancel>İptal</AlertDialogCancel>
+                                <AlertDialogAction onClick={() => handleDeleteSelected(duplicateGroups)} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">Sil</AlertDialogAction>
+                            </AlertDialogFooter>
+                        </AlertDialogContent>
+                    </AlertDialog>
+                </div>
             </header>
             <Accordion type="multiple" className="w-full">
             {duplicateGroups.map(group => (
@@ -181,7 +195,12 @@ export default function AudioDedupe() {
                 <AccordionItem value={group.id} className="border-b-0">
                   <AccordionTrigger className="p-4 hover:no-underline hover:bg-muted/50">
                     <div className="flex-1 text-left">
-                      <p className="font-semibold text-lg">{group.files.length} ähnliche Dateien gefunden</p>
+                      <div className="flex items-center justify-between">
+                        <p className="font-semibold text-lg">{group.files.length} benzer dosya bulundu</p>
+                        {typeof group.similarityScore === 'number' && (
+                           <Badge variant="secondary">Benzerlik: {Math.round(group.similarityScore * 100)}%</Badge>
+                        )}
+                      </div>
                       <div className="flex items-center text-sm text-muted-foreground mt-1">
                         <Info className="w-4 h-4 mr-2"/>
                         <span className="font-mono text-xs">{group.reason}</span>
@@ -201,7 +220,7 @@ export default function AudioDedupe() {
                                     id={`${group.id}-${filePath}`}
                                     checked={group.selection.has(filePath)}
                                     onCheckedChange={() => handleToggleSelection(group.id, filePath)}
-                                    aria-label={`Select file ${filePath}`}
+                                    aria-label={`Dosyayı seç ${filePath}`}
                                 />
                                 <div className="flex-1 overflow-hidden">
                                     <label htmlFor={`${group.id}-${filePath}`} className="font-medium flex items-center gap-2 cursor-pointer truncate">
@@ -222,19 +241,19 @@ export default function AudioDedupe() {
                         <AlertDialog>
                           <AlertDialogTrigger asChild>
                             <Button variant="ghost" className="text-destructive hover:text-destructive hover:bg-destructive/10" disabled={group.selection.size === 0 || isPending}>
-                              <Trash2 className="mr-2 h-4 w-4" /> Ausgewählte in dieser Gruppe löschen ({group.selection.size})
+                              <Trash2 className="mr-2 h-4 w-4" /> Bu gruptaki seçilileri sil ({group.selection.size})
                             </Button>
                           </AlertDialogTrigger>
                           <AlertDialogContent>
                             <AlertDialogHeader>
-                                <AlertDialogTitle>Sind Sie sicher?</AlertDialogTitle>
+                                <AlertDialogTitle>Emin misiniz?</AlertDialogTitle>
                                 <AlertDialogDescription>
-                                    Dadurch werden {group.selection.size} Datei(en) aus dieser Gruppe dauerhaft gelöscht. Diese Aktion kann nicht rückgängig gemacht werden.
+                                   Bu gruptaki {group.selection.size} dosyayı kalıcı olarak silecektir. Bu eylem geri alınamaz.
                                 </AlertDialogDescription>
                             </AlertDialogHeader>
                             <AlertDialogFooter>
-                                <AlertDialogCancel>Abbrechen</AlertDialogCancel>
-                                <AlertDialogAction onClick={() => handleDeleteSelected([group])} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">Löschen</AlertDialogAction>
+                                <AlertDialogCancel>İptal</AlertDialogCancel>
+                                <AlertDialogAction onClick={() => handleDeleteSelected([group])} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">Sil</AlertDialogAction>
                             </AlertDialogFooter>
                           </AlertDialogContent>
                         </AlertDialog>
@@ -253,16 +272,16 @@ export default function AudioDedupe() {
       return (
         <div className="text-center p-10">
           <FileScan className="h-16 w-16 text-primary mx-auto mb-4" />
-          <h2 className="text-2xl font-bold">Scan abgeschlossen</h2>
-          <p className="text-muted-foreground mb-6">{files.length} Audiodateien gefunden. Bereit zur Analyse auf Duplikate.</p>
+          <h2 className="text-2xl font-bold">Tarama tamamlandı</h2>
+          <p className="text-muted-foreground mb-6">{files.length} ses dosyası bulundu. Kopya analizi için hazır.</p>
           <div className="flex justify-center gap-4">
             <Button size="lg" onClick={handleAnalyze} disabled={isPending}>
                 <FileScan className="mr-2 h-5 w-5" />
-                Auf Duplikate analysieren
+                Kopyaları Analiz Et
             </Button>
             <Button size="lg" variant="outline" onClick={handleSelectDirectoryClick} disabled={isPending}>
-                <FolderSearch className="mr-2 h-5 w-5" />
-                Einen anderen Ordner auswählen
+                <FolderPlus className="mr-2 h-5 w-5" />
+                Daha Fazla Klasör Ekle
             </Button>
           </div>
         </div>
@@ -281,11 +300,11 @@ export default function AudioDedupe() {
           multiple
         />
         <FolderSearch className="h-16 w-16 text-primary mx-auto mb-4" />
-        <h2 className="text-2xl font-bold">Beginnen Sie mit dem Scannen eines Ordners</h2>
-        <p className="text-muted-foreground mb-6">Wählen Sie Ihr Hauptmusikverzeichnis aus, um doppelte Audiodateien zu finden.</p>
+        <h2 className="text-2xl font-bold">Bir klasör tarayarak başlayın</h2>
+        <p className="text-muted-foreground mb-6">Yinelenen ses dosyalarını bulmak için ana müzik dizininizi seçin.</p>
         <Button size="lg" onClick={handleSelectDirectoryClick} disabled={isPending}>
           <FolderSearch className="mr-2 h-5 w-5" />
-          Musikordner auswählen
+          Müzik Klasörünü Seç
         </Button>
       </div>
     );
@@ -296,7 +315,7 @@ export default function AudioDedupe() {
       <header className="text-center space-y-2 pt-8">
         <Logo />
         <p className="text-muted-foreground">
-        Finden und entfernen Sie doppelte Audiodateien aus Ihrer Bibliothek mit der Kraft der KI.
+        Yapay zekanın gücüyle kütüphanenizdeki yinelenen ses dosyalarını bulun ve kaldırın.
         </p>
       </header>
       <main className="w-full">
@@ -306,7 +325,7 @@ export default function AudioDedupe() {
                     <div className="p-4 mb-4 rounded-md bg-destructive/10 text-destructive border border-destructive/20 flex items-start gap-3">
                         <AlertTriangle className="h-5 w-5 flex-shrink-0" />
                         <div>
-                            <p className="font-semibold">Ein Fehler ist aufgetreten</p>
+                            <p className="font-semibold">Bir hata oluştu</p>
                             <p className="text-sm">{error}</p>
                         </div>
                     </div>
@@ -315,7 +334,7 @@ export default function AudioDedupe() {
             </CardContent>
         </Card>
         <footer className="text-center mt-8 text-sm text-muted-foreground">
-            <p>&copy; {new Date().getFullYear()} Audio Dedupe. Säubern Sie Ihre Bibliothek, genießen Sie Ihre Musik.</p>
+            <p>&copy; {new Date().getFullYear()} Audio Dedupe. Kütüphanenizi temizleyin, müziğinizin keyfini çıkarın.</p>
         </footer>
       </main>
     </div>

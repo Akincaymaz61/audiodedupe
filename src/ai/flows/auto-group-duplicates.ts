@@ -23,6 +23,7 @@ export type AutoGroupDuplicatesInput = z.infer<typeof AutoGroupDuplicatesInputSc
 const DuplicateGroupSchema = z.object({
   files: z.array(z.string()).describe('List of file paths in this duplicate group'),
   reason: z.string().describe('The reason why these files are considered duplicates'),
+  similarityScore: z.number().min(0).max(1).describe('A score from 0 to 1 indicating how similar the files in the group are to each other.'),
 });
 
 const AutoGroupDuplicatesOutputSchema = z.object({
@@ -38,7 +39,9 @@ const prompt = ai.definePrompt({
   name: 'autoGroupDuplicatesPrompt',
   input: {schema: AutoGroupDuplicatesInputSchema},
   output: {schema: AutoGroupDuplicatesOutputSchema},
-  prompt: `You are an AI assistant that analyzes a list of audio file paths and groups potential duplicate tracks together. You will return a list of duplicate groups with the file paths and the reasoning behind the group.
+  prompt: `You are an AI assistant that analyzes a list of audio file paths and groups potential duplicate tracks together. You will return a list of duplicate groups with the file paths, the reasoning behind the group, and a similarity score.
+
+The similarity score should be a number between 0 and 1, where 1 represents a perfect match and 0 represents no similarity. Base the score on file name patterns, folder structure, and common naming conventions for remixes, versions, or masters.
 
 Analyze the following list of files:
 

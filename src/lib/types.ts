@@ -12,4 +12,5 @@ export type DuplicateGroup = AutoGroupDuplicatesOutput['duplicateGroups'][0];
 export type DuplicateGroupWithSelection = DuplicateGroup & {
   id: string;
   selection: Set<string>;
+  similarityScore?: number;
 };
