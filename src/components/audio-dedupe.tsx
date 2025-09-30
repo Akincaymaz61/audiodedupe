@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, useTransition, useRef } from 'react';
+import { useState, useMemo, useCallback, useTransition, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
@@ -24,27 +24,14 @@ import { ScrollArea } from './ui/scroll-area';
 
 const AUDIO_EXTENSIONS = /\.(mp3|wav|flac|m4a|ogg|aac|aiff)$/i;
 
-type FileSystemFileHandleStub = {
-    name: string;
-    kind: 'file';
-    remove: () => Promise<void>;
-};
-
-type FileSystemDirectoryHandleStub = {
-    name: string;
-    kind: 'directory';
-    entries: () => AsyncIterable<FileSystemFileHandleStub | FileSystemDirectoryHandleStub>;
-    removeEntry: (name: string, options?: { recursive?: boolean }) => Promise<void>;
-};
-
 export default function AudioDedupe() {
   const [files, setFiles] = useState<AppFile[]>([]);
-  const [filesByPath, setFilesByPath] = useState<Map<string, AppFile>>(new Map());
   const [duplicateGroups, setDuplicateGroups] = useState<DuplicateGroupWithSelection[]>([]);
   const [loadingMessage, setLoadingMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [analysisRan, setAnalysisRan] = useState(false);
 
   const { toast } = useToast();
 
@@ -52,36 +39,40 @@ export default function AudioDedupe() {
     fileInputRef.current?.click();
   };
 
-  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFiles = event.target.files;
-    if (!selectedFiles) return;
-
+  const processFiles = useCallback((selectedFiles: FileList) => {
     setError(null);
     setDuplicateGroups([]);
+    setAnalysisRan(false);
 
-    startTransition(async () => {
+    startTransition(() => {
         setLoadingMessage('Scanning for audio files...');
-        const allFiles: AppFile[] = Array.from(selectedFiles)
-            .filter(file => AUDIO_EXTENSIONS.test(file.name) && file.webkitRelativePath)
-            .map(file => ({
-                // The File System Access API is not used here, so we create stubs.
-                // Deletion will be handled by a different mechanism if needed, or this can be adapted
-                // if we can get directory handles another way. For now, deletion is not implemented with this method.
-                handle: { name: file.name, kind: 'file', remove: async () => { console.error("Deletion not implemented for this file handle type.") } } as unknown as FileSystemFileHandle,
-                parentHandle: { name: '', kind: 'directory' } as unknown as FileSystemDirectoryHandle,
-                name: file.name,
-                path: file.webkitRelativePath,
-            }));
+        const allFiles: AppFile[] = [];
+        for (let i = 0; i < selectedFiles.length; i++) {
+            const file = selectedFiles[i];
+            if (AUDIO_EXTENSIONS.test(file.name) && file.webkitRelativePath) {
+                allFiles.push({
+                    handle: { name: file.name, kind: 'file', remove: async () => { console.error("Deletion not implemented for this file handle type.") } } as unknown as FileSystemFileHandle,
+                    parentHandle: { name: '', kind: 'directory' } as unknown as FileSystemDirectoryHandle,
+                    name: file.name,
+                    path: file.webkitRelativePath,
+                });
+            }
+        }
 
         setFiles(allFiles);
-        setFilesByPath(new Map(allFiles.map(f => [f.path, f])));
         setLoadingMessage('');
 
         if (allFiles.length === 0) {
             setError("No audio files found in the selected directory.");
         }
     });
+  }, []);
 
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = event.target.files;
+    if (selectedFiles) {
+        processFiles(selectedFiles);
+    }
     // Reset the input value to allow selecting the same directory again
     event.target.value = '';
   };
@@ -92,6 +83,7 @@ export default function AudioDedupe() {
       setError('No files to analyze. Please scan a directory first.');
       return;
     }
+    setAnalysisRan(true);
     startTransition(async () => {
       setLoadingMessage('Analyzing files with AI... This may take a while for large libraries.');
       setError(null);
@@ -155,7 +147,7 @@ export default function AudioDedupe() {
   const renderContent = () => {
     if (isPending) return renderLoading();
 
-    if (duplicateGroups.length > 0) {
+    if (analysisRan && duplicateGroups.length > 0) {
       return (
         <div className="space-y-6">
             <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -200,26 +192,30 @@ export default function AudioDedupe() {
                     <div className="border-t">
                       <ScrollArea className="h-full max-h-[300px]">
                         <ul className="p-4 space-y-3">
-                          {group.files.map(filePath => (
-                            <li key={filePath} className="flex items-center gap-4 p-2 rounded-md hover:bg-muted/50 transition-colors">
-                              <Checkbox
-                                id={`${group.id}-${filePath}`}
-                                checked={group.selection.has(filePath)}
-                                onCheckedChange={() => handleToggleSelection(group.id, filePath)}
-                                aria-label={`Select file ${filePath}`}
-                              />
-                              <div className="flex-1">
-                                <label htmlFor={`${group.id}-${filePath}`} className="font-medium flex items-center gap-2 cursor-pointer">
-                                  <Music2 className="w-4 h-4 text-primary" />
-                                  <span>{filePath.split('/').pop()}</span>
-                                </label>
-                                <p className="text-xs text-muted-foreground flex items-center gap-2">
-                                  <Folder className="w-3 h-3" />
-                                  <span>{filePath.substring(0, filePath.lastIndexOf('/')) || '/'}</span>
-                                </p>
-                              </div>
-                            </li>
-                          ))}
+                          {group.files.map(filePath => {
+                            const fileName = filePath.split('/').pop() || filePath;
+                            const dirPath = filePath.substring(0, filePath.lastIndexOf('/')) || '/';
+                            return (
+                                <li key={filePath} className="flex items-center gap-4 p-2 rounded-md hover:bg-muted/50 transition-colors">
+                                <Checkbox
+                                    id={`${group.id}-${filePath}`}
+                                    checked={group.selection.has(filePath)}
+                                    onCheckedChange={() => handleToggleSelection(group.id, filePath)}
+                                    aria-label={`Select file ${filePath}`}
+                                />
+                                <div className="flex-1 overflow-hidden">
+                                    <label htmlFor={`${group.id}-${filePath}`} className="font-medium flex items-center gap-2 cursor-pointer truncate">
+                                    <Music2 className="w-4 h-4 text-primary flex-shrink-0" />
+                                    <span className="truncate" title={fileName}>{fileName}</span>
+                                    </label>
+                                    <p className="text-xs text-muted-foreground flex items-center gap-2 mt-1 truncate">
+                                    <Folder className="w-3 h-3 flex-shrink-0" />
+                                    <span className="truncate" title={dirPath}>{dirPath}</span>
+                                    </p>
+                                </div>
+                                </li>
+                            );
+                          })}
                         </ul>
                       </ScrollArea>
                       <div className="p-4 border-t bg-muted/30 flex justify-end">
@@ -259,10 +255,16 @@ export default function AudioDedupe() {
           <FileScan className="h-16 w-16 text-primary mx-auto mb-4" />
           <h2 className="text-2xl font-bold">Scan Complete</h2>
           <p className="text-muted-foreground mb-6">Found {files.length} audio files. Ready to analyze for duplicates.</p>
-          <Button size="lg" onClick={handleAnalyze} disabled={isPending} style={{backgroundColor: 'hsl(var(--accent))', color: 'hsl(var(--accent-foreground))'}}>
-            <FileScan className="mr-2 h-5 w-5" />
-            Analyze for Duplicates
-          </Button>
+          <div className="flex justify-center gap-4">
+            <Button size="lg" onClick={handleAnalyze} disabled={isPending}>
+                <FileScan className="mr-2 h-5 w-5" />
+                Analyze for Duplicates
+            </Button>
+            <Button size="lg" variant="outline" onClick={handleSelectDirectoryClick} disabled={isPending}>
+                <FolderSearch className="mr-2 h-5 w-5" />
+                Select a different folder
+            </Button>
+          </div>
         </div>
       );
     }
@@ -276,6 +278,7 @@ export default function AudioDedupe() {
           onChange={handleFileSelect}
           webkitdirectory="true"
           mozdirectory="true"
+          multiple
         />
         <FolderSearch className="h-16 w-16 text-primary mx-auto mb-4" />
         <h2 className="text-2xl font-bold">Start by scanning a folder</h2>
