@@ -91,28 +91,39 @@ export default function AudioDedupe() {
       setError('Analiz edilecek dosya yok. Lütfen önce bir klasör seçin.');
       return;
     }
-    setAnalysisRan(true);
+    
     startTransition(async () => {
+      setAnalysisRan(true);
       setLoadingMessage('Dosyalar yapay zeka ile analiz ediliyor... Bu işlem büyük kütüphanelerde zaman alabilir.');
       setError(null);
-      const input = { fileList: files.map(f => ({ filePath: f.path })) };
-      const result = await findDuplicateFiles(input);
+      try {
+        const input = { fileList: files.map(f => ({ filePath: f.path })) };
+        const result = await findDuplicateFiles(input);
 
-      if (result.success && result.data) {
-        const groupsWithSelection = result.data.duplicateGroups
-          .filter(g => g.files.length > 1)
-          .map((group, index) => {
-            const selection = new Set(group.files.slice(1));
-            return { ...group, id: `group-${index}`, selection };
-          });
-        setDuplicateGroups(groupsWithSelection);
-        if (groupsWithSelection.length === 0) {
-            toast({ title: "Kopya bulunamadı", description: "Yapay zeka analizi tamamlandı ancak yinelenen grup tespit edilmedi." });
+        if (result.success && result.data) {
+          const groupsWithSelection = result.data.duplicateGroups
+            .filter(g => g.files.length > 1)
+            .map((group, index) => {
+              const selection = new Set(group.files.slice(1));
+              return { ...group, id: `group-${index}`, selection };
+            });
+          setDuplicateGroups(groupsWithSelection);
+          if (groupsWithSelection.length === 0) {
+              toast({ title: "Kopya bulunamadı", description: "Yapay zeka analizi tamamlandı ancak yinelenen grup tespit edilmedi." });
+          }
+        } else {
+           // This case may not be reached if the action throws an error
+          setError( 'Analiz sırasında bilinmeyen bir hata oluştu.');
         }
-      } else {
-        setError(result.error || 'Analiz sırasında bilinmeyen bir hata oluştu.');
+      } catch (e) {
+          if (e instanceof Error) {
+            setError(e.message);
+          } else {
+            setError('Analiz sırasında beklenmedik bir hata oluştu.');
+          }
+      } finally {
+        setLoadingMessage('');
       }
-      setLoadingMessage('');
     });
   };
 
@@ -155,7 +166,7 @@ export default function AudioDedupe() {
   const renderContent = () => {
     if (isPending) return renderLoading();
 
-    if (analysisRan && duplicateGroups.length > 0) {
+    if (analysisRan && !error && duplicateGroups.length > 0) {
       return (
         <div className="space-y-6">
             <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -266,6 +277,27 @@ export default function AudioDedupe() {
           </Accordion>
         </div>
       );
+    }
+    
+    // This now handles analysisRan && (error || duplicateGroups.length === 0)
+    if (analysisRan) {
+         return (
+            <div className="text-center p-10">
+              <FileScan className="h-16 w-16 text-primary mx-auto mb-4" />
+              <h2 className="text-2xl font-bold">Analiz Tamamlandı</h2>
+              <p className="text-muted-foreground mb-6">Yinelenen dosya bulunamadı veya analiz sırasında bir sorun oluştu. Başka bir klasör ekleyebilir veya yeniden analiz edebilirsiniz.</p>
+              <div className="flex justify-center gap-4">
+                <Button size="lg" onClick={handleAnalyze} disabled={isPending}>
+                    <FileScan className="mr-2 h-5 w-5" />
+                    Tekrar Analiz Et
+                </Button>
+                <Button size="lg" variant="outline" onClick={handleSelectDirectoryClick} disabled={isPending}>
+                    <FolderPlus className="mr-2 h-5 w-5" />
+                    Daha Fazla Klasör Ekle
+                </Button>
+              </div>
+            </div>
+          );
     }
     
     if (files.length > 0) {

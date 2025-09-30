@@ -40,7 +40,7 @@ export async function findDuplicateFiles(input: AutoGroupDuplicatesInput) {
                     await delay(waitTime);
                 } else {
                     // Non-retriable error or max retries reached
-                    console.error("AI analysis failed:", error);
+                    console.error("AI analysis failed after multiple retries:", error);
                     let errorMessage = "Yapay zeka analizi sırasında bilinmeyen bir hata oluştu.";
                     if (error instanceof Error) {
                         if (error.message.includes('503')) {
@@ -51,7 +51,8 @@ export async function findDuplicateFiles(input: AutoGroupDuplicatesInput) {
                             errorMessage = `Bir hata oluştu: ${error.message}`;
                         }
                     }
-                    return { success: false, error: errorMessage };
+                    // Throw an error to be caught by the client-side transition
+                    throw new Error(errorMessage);
                 }
             }
         }
