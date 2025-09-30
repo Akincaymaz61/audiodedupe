@@ -273,7 +273,8 @@ export default function AudioDedupe() {
                                 <AlertDialogCancel>Cancel</AlertDialogCancel>
                                 <AlertDialogAction onClick={() => handleDeleteSelected([group])} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">Delete</AlertDialogAction>
                             </AlertDialogFooter>
-                          </AlertDialog>
+                          </AlertDialogContent>
+                        </AlertDialog>
                       </div>
                     </div>
                   </AccordionContent>
@@ -322,9 +323,9 @@ export default function AudioDedupe() {
       </header>
       <main className="w-full">
         <Card className="w-full shadow-lg">
-            <CardContent className="p-0">
+            <CardContent className="p-6">
                 {error && (
-                    <div className="p-4 m-4 rounded-md bg-destructive/10 text-destructive border border-destructive/20 flex items-start gap-3">
+                    <div className="p-4 mb-4 rounded-md bg-destructive/10 text-destructive border border-destructive/20 flex items-start gap-3">
                         <AlertTriangle className="h-5 w-5 flex-shrink-0" />
                         <div>
                             <p className="font-semibold">An Error Occurred</p>
