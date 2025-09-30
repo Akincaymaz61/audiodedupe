@@ -23,15 +23,20 @@ export async function findDuplicateFiles(input: AutoGroupDuplicatesInput) {
             }
         }
         
-        // Grupları birleştirme ve yeniden işleme (isteğe bağlı, şimdilik basit birleştirme)
-        // Burada, farklı kümelerden gelen grupları daha akıllıca birleştirecek ek mantık eklenebilir.
-        // Şimdilik, sadece tüm grupları birleştiriyoruz.
-
         return { success: true, data: { duplicateGroups: allDuplicateGroups } };
 
     } catch (error) {
         console.error("AI analysis failed:", error);
-        const errorMessage = error instanceof Error ? error.message : "Yapay zeka analizi sırasında bilinmeyen bir hata oluştu.";
-        return { success: false, error: `Yapay zeka analizi başarısız oldu. Lütfen tekrar deneyin. Detaylar: ${errorMessage}` };
+        let errorMessage = "Yapay zeka analizi sırasında bilinmeyen bir hata oluştu.";
+        if (error instanceof Error) {
+            if (error.message.includes('503')) {
+                errorMessage = "Yapay zeka hizmeti şu anda aşırı yoğun. Lütfen birkaç dakika bekleyip tekrar deneyin.";
+            } else if (error.message.includes('429')) {
+                errorMessage = "Çok fazla istek gönderildi. Lütfen bir süre bekleyip tekrar deneyin.";
+            } else {
+                errorMessage = `Bir hata oluştu: ${error.message}`;
+            }
+        }
+        return { success: false, error: errorMessage };
     }
 }

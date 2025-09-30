@@ -64,7 +64,7 @@ export default function AudioDedupe() {
         }
 
         if (newFiles.length > 0) {
-          setFiles(prevFiles => [...prevFiles, ...newFiles]);
+          setFiles(prevFiles => [...prevFiles, ...newFiles].sort((a,b) => a.path.localeCompare(b.path)));
           setDuplicateGroups([]);
           setAnalysisRan(false);
         }
