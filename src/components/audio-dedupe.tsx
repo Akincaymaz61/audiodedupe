@@ -45,7 +45,7 @@ export default function AudioDedupe() {
     setError(null);
 
     startTransition(() => {
-        setLoadingMessage('Audiodateien werden gesucht...');
+        setLoadingMessage('Ses dosyaları aranıyor...');
         const newFiles: AppFile[] = [];
         for (let i = 0; i < selectedFiles.length; i++) {
             const file = selectedFiles[i];
