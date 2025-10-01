@@ -165,10 +165,11 @@ export default function AudioDedupe() {
       return new Promise((resolve) => {
         jsmediatags.read(file, {
             onSuccess: (tag) => {
+                const v2 = (tag.tags as any).v2;
                 resolve({
                     path: (file as any).webkitRelativePath || file.name,
                     size: file.size,
-                    bitrate: tag.tags.TPE1 ? (tag.tags as any).v2.TLEN / 8192 : 0, // Simplified bitrate estimation
+                    bitrate: v2 && v2.TLEN ? v2.TLEN / 8192 : 0, // Simplified bitrate estimation
                 });
             },
             onError: () => {
