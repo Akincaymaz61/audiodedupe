@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server';
 
-export const runtime = 'edge'; // Vercel Edge Fonksiyonu olarak çalıştır
-
 // Levenshtein mesafesi hesaplama fonksiyonu
 function calculateLevenshtein(a: string, b: string): number {
     const an = a ? a.length : 0;
@@ -172,6 +170,7 @@ export async function POST(request: Request) {
 
   } catch (error) {
     console.error('Analysis API error:', error);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+    return NextResponse.json({ error: 'Internal Server Error', details: errorMessage }, { status: 500 });
   }
 }
