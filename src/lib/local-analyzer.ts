@@ -59,13 +59,13 @@ function normalizeFileName(filePath: string): string {
     name = name.replace(/^\d+\s*[-.]\s*/, '').trim();
 
     // 3. Remove common duplicate markers and copy indicators
-    name = name.replace(/\(\d+\)$/, '').trim(); // (1), (2)
-    name = name.replace(/\[\d+\]$/, '').trim(); // [1], [2]
-    name = name.replace(/-\s*\d+$/, '').trim(); // - 1, -2
-    name = name.replace(/copy\s*\d*$/, '').trim(); // copy, copy 2
-    name = name.replace(/kopya\s*\d*$/, '').trim(); // kopya, kopya 2
-    name = name.replace(/\(copy\)$/, '').trim(); // (copy)
-    name = name.replace(/\(kopya\)$/, '').trim(); // (kopya)
+    // This is more aggressive and might remove legitimate numbers, so we handle it carefully
+    name = name.replace(/\(copy\)$/, '').trim(); 
+    name = name.replace(/\(kopya\)$/, '').trim(); 
+    name = name.replace(/copy\s*\d*$/, '').trim(); 
+    name = name.replace(/kopya\s*\d*$/, '').trim(); 
+    name = name.replace(/\(\d+\)$/, '').trim();
+    name = name.replace(/\[\d+\]$/, '').trim();
 
     // 4. Handle version markers (e.g., (remix), [live])
     let version = '';
@@ -78,8 +78,8 @@ function normalizeFileName(filePath: string): string {
         return match; // Keep it if it's not a version marker
     }).trim();
     
-    // 5. Remove special characters and extra spaces from the base name
-    const baseName = nameWithoutVersion.replace(/[^\w\s]/gi, ' ').replace(/\s+/g, ' ').trim();
+    // 5. Remove special characters and extra spaces from the base name, but keep numbers
+    const baseName = nameWithoutVersion.replace(/[^\w\s\d]/gi, ' ').replace(/\s+/g, ' ').trim();
     
     // 6. Construct final normalized name
     return (version ? `${baseName} ${version}` : baseName).trim();
