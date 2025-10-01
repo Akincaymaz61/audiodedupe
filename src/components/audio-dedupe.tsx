@@ -64,6 +64,7 @@ export default function AudioDedupe() {
   const [excludeFilterText, setExcludeFilterText] = useState('');
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const analysisStateRef = useRef({ isRunning: false });
+  const [openAccordionItems, setOpenAccordionItems] = useState<string[]>([]);
 
   const { toast } = useToast();
 
@@ -86,7 +87,6 @@ export default function AudioDedupe() {
         if (selectedFiles.length > 0 && selectedFiles[0].webkitRelativePath) {
             const firstPath = selectedFiles[0].webkitRelativePath;
             const pathParts = firstPath.split('/');
-            // If selecting a folder recursively, the base path is the folder name itself.
             if (isRecursive && pathParts.length > 1) {
                 basePath = pathParts[0];
             }
@@ -99,12 +99,17 @@ export default function AudioDedupe() {
               let relativePath = file.webkitRelativePath || file.name;
               let fileBasePath = basePath;
               
-              if (!fileBasePath) {
+              if (!isRecursive) {
+                 const pathParts = relativePath.split('/');
+                 if (pathParts.length > 1) {
+                    fileBasePath = pathParts.slice(0, -1).join('/');
+                 } else {
+                    fileBasePath = '.'; 
+                 }
+              } else if (!fileBasePath) {
                  const pathParts = relativePath.split('/');
                  if (pathParts.length > 1) {
                     fileBasePath = pathParts[0];
-                 } else {
-                    fileBasePath = relativePath;
                  }
               }
 
@@ -113,7 +118,7 @@ export default function AudioDedupe() {
                   parentHandle: { name: '', kind: 'directory' } as unknown as FileSystemDirectoryHandle,
                   name: file.name,
                   path: relativePath,
-                  basePath: fileBasePath,
+                  basePath: fileBasePath || 'Bilinmeyen Klasör',
               }
           });
 
@@ -141,7 +146,6 @@ export default function AudioDedupe() {
     if (selectedFiles && selectedFiles.length > 0) {
         processFiles(selectedFiles, isRecursive);
     }
-    // Reset file input to allow selecting the same folder again
     event.target.value = '';
   };
 
@@ -183,10 +187,8 @@ export default function AudioDedupe() {
             setLoadingMessage(`${processedCount} / ${allFilePaths.length} dosya analiz edildi...`);
 
             if (endIndex < allFilePaths.length) {
-                // Yield to the main thread before processing the next chunk
                 setTimeout(() => processChunk(endIndex), 0);
             } else {
-                // Analysis is complete
                 const groupsWithSelection = allGroups
                     .map((group) => ({
                         ...group,
@@ -197,6 +199,11 @@ export default function AudioDedupe() {
                 
                 setDuplicateGroups(groupsWithSelection);
                 setResultsSimilarityFilter(similarityThreshold);
+                
+                const initiallyOpen = groupsWithSelection
+                    .filter(g => g.files.length === 2)
+                    .map(g => g.id);
+                setOpenAccordionItems(initiallyOpen);
                 
                 if (groupsWithSelection.length === 0) {
                     toast({ title: "Kopya bulunamadı", description: "Analiz tamamlandı ancak yinelenen grup tespit edilmedi." });
@@ -212,19 +219,17 @@ export default function AudioDedupe() {
             const errorMessage = e instanceof Error ? e.message : 'Analiz sırasında beklenmedik bir hata oluştu.';
             setError(errorMessage);
             toast({ title: "Analiz Hatası", description: errorMessage, variant: "destructive" });
-            setViewState('results'); // Go to results view even on error
+            setViewState('results');
             setLoadingMessage('');
             analysisStateRef.current.isRunning = false;
         }
     };
     
-    // Start the first chunk processing
     setLoadingMessage(`0 / ${allFilePaths.length} dosya analiz edildi...`);
     setTimeout(() => processChunk(0), 100);
   };
 
   useEffect(() => {
-    // Cleanup function to stop analysis if component unmounts
     return () => {
         analysisStateRef.current.isRunning = false;
     };
@@ -248,7 +253,6 @@ export default function AudioDedupe() {
     const handleToggleGroupSelection = (groupId: string, selectAll: boolean) => {
     setDuplicateGroups(prev => prev.map(group => {
       if (group.id === groupId) {
-        // Leave the first file unselected
         const newSelection = selectAll ? new Set(group.files.slice(1)) : new Set<string>();
         return { ...group, selection: newSelection };
       }
@@ -278,23 +282,24 @@ export default function AudioDedupe() {
   const selectedFolders = useMemo(() => {
     if (files.length === 0) return [];
     const folderSet = new Set<string>();
-
     files.forEach(file => {
-        const parts = file.path.split('/');
-        if (parts.length > 1) {
-            let currentPath = '';
-            for (let i = 0; i < parts.length - 1; i++) {
-                currentPath = currentPath ? `${currentPath}/${parts[i]}` : parts[i];
-                folderSet.add(currentPath);
-            }
+        const pathParts = file.path.split('/');
+        if (pathParts.length > 1) {
+            folderSet.add(pathParts.slice(0, -1).join('/'));
         }
     });
     
     const allFolders = Array.from(folderSet).sort();
-    const rootFolders = new Set<string>(files.map(f => f.basePath).filter(Boolean) as string[]);
     
-    // If a folder is a root folder selected recursively, we don't want to show it, only its children.
-    return allFolders.filter(folder => !rootFolders.has(folder));
+    const rootFolders = new Set<string>(allFolders.map(f => f.split('/')[0]));
+    
+    return allFolders.filter(folder => {
+        const isRoot = rootFolders.has(folder);
+        // This logic is tricky. Basically, if a folder is a root, but there are also subfolders of it,
+        // we might not want to show the root. This depends on user expectation.
+        // For now, let's show all unique folder paths found.
+        return true;
+    });
 
   }, [files]);
 
@@ -345,7 +350,6 @@ export default function AudioDedupe() {
 
   const totalSelectedCount = useMemo(() => {
     return filteredDuplicateGroups.reduce((acc, group) => {
-        // Count only selected items that are also in the filtered group
         let count = 0;
         for (const selectedFile of group.selection) {
             if (group.files.includes(selectedFile)) {
@@ -420,11 +424,16 @@ export default function AudioDedupe() {
                     </AlertDialog>
                 </CardHeader>
             </Card>
-            <Accordion type="multiple" className="w-full space-y-4">
+            <Accordion 
+                type="multiple"
+                className="w-full space-y-4"
+                value={openAccordionItems}
+                onValueChange={setOpenAccordionItems}
+            >
             {filteredDuplicateGroups.map(group => {
               const isGroupFullySelected = group.selection.size === group.files.length - 1;
               return (
-              <Card key={group.id} className="overflow-hidden">
+              <Card key={group.id} className="overflow-hidden transition-all duration-300">
                 <AccordionItem value={group.id} className="border-b-0">
                   <div className="flex items-center p-4 pr-1 hover:bg-muted/50">
                     <Checkbox
@@ -437,6 +446,7 @@ export default function AudioDedupe() {
                         <div className="flex-1">
                           <div className='flex items-center justify-between'>
                              <div className="flex items-center gap-3">
+                                 <ListMusic className="w-5 h-5 text-primary" />
                                  <p className="font-semibold text-lg">{group.files.length} Benzer Dosya Grubu</p>
                              </div>
                              <Badge variant={group.similarityScore > 0.9 ? 'default' : 'secondary'}>
@@ -451,7 +461,7 @@ export default function AudioDedupe() {
                     </AccordionTrigger>
                   </div>
                   <AccordionContent className="p-0">
-                    <div className="border-t">
+                    <div className="border-t bg-background/30">
                       <ul className="p-4 space-y-3">
                         {group.files.map(filePath => {
                           const fileName = filePath.split('/').pop() || filePath;
@@ -703,5 +713,3 @@ export default function AudioDedupe() {
     </SidebarProvider>
   );
 }
-
-    
