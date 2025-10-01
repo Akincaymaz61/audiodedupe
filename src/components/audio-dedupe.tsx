@@ -28,11 +28,10 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast"
 import { findDuplicateGroupsLocally } from '@/lib/local-analyzer';
-import { FolderSearch, FileScan, Trash2, Loader2, Music2, Folder, AlertTriangle, Info, FolderPlus, Settings, ListMusic, FileX2 } from 'lucide-react';
+import { FolderSearch, FileScan, Trash2, Loader2, Music2, Folder, AlertTriangle, Info, FolderPlus, Settings, ListMusic, FileX2, FolderX, Search, XCircle } from 'lucide-react';
 import type { AppFile, DuplicateGroupWithSelection } from '@/lib/types';
 import { Logo } from './logo';
 import { Badge } from './ui/badge';
@@ -40,6 +39,7 @@ import { Separator } from './ui/separator';
 import { Label } from './ui/label';
 import { Slider } from './ui/slider';
 import { ScrollArea } from './ui/scroll-area';
+import { Input } from './ui/input';
 
 const AUDIO_EXTENSIONS = /\.(mp3|wav|flac|m4a|ogg|aac|aiff)$/i;
 
@@ -54,6 +54,7 @@ export default function AudioDedupe() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [viewState, setViewState] = useState<ViewState>('initial');
   const [similarityThreshold, setSimilarityThreshold] = useState(0.85);
+  const [filterText, setFilterText] = useState('');
 
   const { toast } = useToast();
 
@@ -103,7 +104,6 @@ export default function AudioDedupe() {
     // Reset file input to allow selecting the same folder again
     event.target.value = '';
   };
-
 
   const handleAnalyze = () => {
     if (files.length === 0) {
@@ -156,6 +156,17 @@ export default function AudioDedupe() {
       return group;
     }));
   };
+  
+    const handleToggleGroupSelection = (groupId: string, selectAll: boolean) => {
+    setDuplicateGroups(prev => prev.map(group => {
+      if (group.id === groupId) {
+        // Leave the first file unselected
+        const newSelection = selectAll ? new Set(group.files.slice(1)) : new Set<string>();
+        return { ...group, selection: newSelection };
+      }
+      return group;
+    }));
+  };
 
   const handleDeleteSelected = async (groupsToDeleteFrom: DuplicateGroupWithSelection[]) => {
     toast({
@@ -173,6 +184,37 @@ export default function AudioDedupe() {
     setViewState('initial');
     toast({title: "Liste Temizlendi", description: "Tüm dosyalar listeden kaldırıldı."})
   }
+
+  const removeFolder = (folderPath: string) => {
+    const newFiles = files.filter(file => !file.path.startsWith(folderPath + '/'));
+    setFiles(newFiles);
+    setDuplicateGroups([]);
+    setViewState(newFiles.length > 0 ? 'files_selected' : 'initial');
+    toast({ title: 'Klasör kaldırıldı', description: `${folderPath} klasöründeki tüm dosyalar listeden çıkarıldı.` });
+  };
+  
+  const selectedFolders = useMemo(() => {
+    const folderSet = new Set<string>();
+    files.forEach(file => {
+      const parts = file.path.split('/');
+      if (parts.length > 1) {
+        folderSet.add(parts[0]);
+      }
+    });
+    return Array.from(folderSet).sort();
+  }, [files]);
+  
+  const filteredDuplicateGroups = useMemo(() => {
+    if (!filterText) {
+      return duplicateGroups;
+    }
+    return duplicateGroups.filter(group =>
+      group.files.some(file =>
+        file.toLowerCase().includes(filterText.toLowerCase())
+      )
+    );
+  }, [duplicateGroups, filterText]);
+
 
   const totalSelectedCount = useMemo(() => {
     return duplicateGroups.reduce((acc, group) => acc + group.selection.size, 0);
@@ -195,13 +237,13 @@ export default function AudioDedupe() {
   );
 
   const renderResultsView = () => {
-    if (duplicateGroups.length === 0) {
+    if (filteredDuplicateGroups.length === 0) {
       return (
         <Card className="shadow-lg w-full max-w-lg mx-auto">
             <CardContent className="p-10 text-center">
               <FileScan className="h-20 w-20 text-primary mx-auto mb-6" />
               <h2 className="text-2xl font-bold">Analiz Tamamlandı</h2>
-              <p className="text-muted-foreground">Tebrikler! Müzik kütüphanenizde yinelenen dosya bulunamadı.</p>
+              <p className="text-muted-foreground">{filterText ? 'Arama kriterlerinize uyan kopya bulunamadı.' : 'Tebrikler! Müzik kütüphanenizde yinelenen dosya bulunamadı.'}</p>
             </CardContent>
         </Card>
       );
@@ -213,7 +255,7 @@ export default function AudioDedupe() {
                 <CardHeader className="flex flex-row items-center justify-between">
                     <div>
                         <CardTitle>Analiz Sonuçları</CardTitle>
-                        <CardDescription>{duplicateGroups.length} grup benzer dosya bulundu.</CardDescription>
+                        <CardDescription>{filteredDuplicateGroups.length} grup benzer dosya bulundu.</CardDescription>
                     </div>
                     <AlertDialog>
                         <AlertDialogTrigger asChild>
@@ -237,18 +279,28 @@ export default function AudioDedupe() {
                 </CardHeader>
             </Card>
             <Accordion type="multiple" className="w-full space-y-4">
-            {duplicateGroups.map(group => (
+            {filteredDuplicateGroups.map(group => {
+              const isGroupFullySelected = group.selection.size === group.files.length - 1;
+              return (
               <Card key={group.id} className="overflow-hidden">
                 <AccordionItem value={group.id} className="border-b-0">
                   <AccordionTrigger className="p-4 hover:no-underline hover:bg-muted/50 text-left">
                     <div className="flex-1">
                       <div className='flex items-center justify-between'>
-                         <p className="font-semibold text-lg">{group.files.length} Benzer Dosya Grubu</p>
+                         <div className="flex items-center gap-3">
+                             <Checkbox
+                                checked={isGroupFullySelected}
+                                onCheckedChange={(checked) => handleToggleGroupSelection(group.id, !!checked)}
+                                onClick={(e) => e.stopPropagation()} // Prevent accordion from toggling
+                                aria-label="Tüm grubu seç/bırak"
+                             />
+                             <p className="font-semibold text-lg">{group.files.length} Benzer Dosya Grubu</p>
+                         </div>
                          <Badge variant={group.similarityScore > 0.9 ? 'default' : 'secondary'}>
                             Benzerlik: {Math.round(group.similarityScore * 100)}%
                          </Badge>
                       </div>
-                      <div className="flex items-center text-sm text-muted-foreground mt-1 gap-2">
+                      <div className="flex items-center text-sm text-muted-foreground mt-1 gap-2 pl-9">
                         <Info className="w-4 h-4 flex-shrink-0"/>
                         <span className="font-mono text-xs truncate" title={group.reason}>{group.reason}</span>
                       </div>
@@ -286,7 +338,8 @@ export default function AudioDedupe() {
                   </AccordionContent>
                 </AccordionItem>
               </Card>
-            ))}
+              )
+            })}
           </Accordion>
         </div>
       );
@@ -358,25 +411,60 @@ export default function AudioDedupe() {
                          <FileScan />
                          Analizi Başlat
                      </Button>
+                     
+                     {viewState === 'results' && (
+                         <div className="relative">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            <Input
+                                placeholder="Sonuçları filtrele..."
+                                value={filterText}
+                                onChange={(e) => setFilterText(e.target.value)}
+                                className="pl-9"
+                            />
+                             {filterText && (
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="absolute right-1 top-1/2 -translate-y-1/2 h-6 w-6"
+                                    onClick={() => setFilterText('')}
+                                >
+                                    <XCircle className="h-4 w-4" />
+                                </Button>
+                            )}
+                        </div>
+                     )}
                  </div>
              </SidebarGroup>
              <Separator />
              <SidebarGroup className="p-2">
                  <SidebarGroupLabel className="flex items-center gap-2">
                      <ListMusic />
-                     Taranan Dosyalar ({files.length})
+                     Taranan Klasörler ({selectedFolders.length})
                  </SidebarGroupLabel>
-                 {files.length > 0 ? (
-                    <ScrollArea className="h-72 w-full rounded-md border p-2">
-                        <div className="text-xs font-mono">
-                            {files.map(file => (
-                                <p key={file.path} className="truncate" title={file.path}>{file.name}</p>
+                 {selectedFolders.length > 0 ? (
+                    <ScrollArea className="h-72 w-full rounded-md border">
+                        <div className="p-1">
+                            {selectedFolders.map(folder => (
+                                <div key={folder} className="group flex items-center justify-between p-2 rounded-md hover:bg-muted/50">
+                                  <p className="text-sm truncate" title={folder}>
+                                    <Folder className="inline-block w-4 h-4 mr-2 text-primary" />
+                                    {folder}
+                                  </p>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6 opacity-0 group-hover:opacity-100"
+                                    onClick={() => removeFolder(folder)}
+                                  >
+                                      <FolderX className="w-4 h-4 text-destructive" />
+                                  </Button>
+                                </div>
                             ))}
                         </div>
                     </ScrollArea>
                  ) : (
                     <div className="text-center text-sm text-muted-foreground p-4">
-                        <p>Henüz dosya eklenmedi.</p>
+                        <p>Henüz klasör eklenmedi.</p>
                     </div>
                  )}
              </SidebarGroup>
