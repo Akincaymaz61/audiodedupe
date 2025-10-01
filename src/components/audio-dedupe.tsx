@@ -32,7 +32,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast"
 import { findDuplicateGroupsLocally } from '@/lib/local-analyzer';
-import { FolderSearch, FileScan, Trash2, Loader2, Music2, Folder, AlertTriangle, Info, FolderPlus, Settings, ListMusic, FileX2, FolderX, Search, XCircle } from 'lucide-react';
+import { FolderSearch, FileScan, Trash2, Loader2, Music2, Folder, AlertTriangle, Info, FolderPlus, Settings, ListMusic, FileX2, FolderX, Search, XCircle, FilterX, MinusCircle } from 'lucide-react';
 import type { AppFile, DuplicateGroupWithSelection } from '@/lib/types';
 import { Logo } from './logo';
 import { Badge } from './ui/badge';
@@ -53,15 +53,23 @@ export default function AudioDedupe() {
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const [viewState, setViewState] = useState<ViewState>('initial');
   const [similarityThreshold, setSimilarityThreshold] = useState(0.85);
   const [filterText, setFilterText] = useState('');
+  const [resultsSimilarityFilter, setResultsSimilarityFilter] = useState(0.85);
+  const [excludeFilterText, setExcludeFilterText] = useState('');
 
   const { toast } = useToast();
 
-  const handleSelectDirectoryClick = () => {
-    fileInputRef.current?.click();
+  const handleSelectDirectory = (recursive = false) => {
+    if (recursive) {
+        folderInputRef.current?.click();
+    } else {
+        fileInputRef.current?.click();
+    }
   };
+
 
   const processFiles = useCallback((selectedFiles: FileList) => {
     setError(null);
@@ -70,12 +78,12 @@ export default function AudioDedupe() {
 
     startTransition(() => {
         const newFiles: AppFile[] = Array.from(selectedFiles)
-          .filter(file => AUDIO_EXTENSIONS.test(file.name) && file.webkitRelativePath)
+          .filter(file => AUDIO_EXTENSIONS.test(file.name) && (file.webkitRelativePath || file.name))
           .map(file => ({
               handle: { name: file.name, kind: 'file' } as unknown as FileSystemFileHandle,
               parentHandle: { name: '', kind: 'directory' } as unknown as FileSystemDirectoryHandle,
               name: file.name,
-              path: file.webkitRelativePath,
+              path: file.webkitRelativePath || file.name,
           }));
 
         const uniqueNewFiles = newFiles.filter(nf => !files.some(f => f.path === nf.path));
@@ -129,6 +137,7 @@ export default function AudioDedupe() {
           .sort((a, b) => b.similarityScore - a.similarityScore);
 
         setDuplicateGroups(groupsWithSelection);
+        setResultsSimilarityFilter(similarityThreshold);
         if (groupsWithSelection.length === 0) {
             toast({ title: "Kopya bulunamadı", description: "Analiz tamamlandı ancak yinelenen grup tespit edilmedi." });
         }
@@ -200,26 +209,48 @@ export default function AudioDedupe() {
       const parts = file.path.split('/');
       if (parts.length > 1) {
         folderSet.add(parts[0]);
+      } else {
+        folderSet.add('.'); // Files in root
       }
     });
     return Array.from(folderSet).sort();
   }, [files]);
   
-  const filteredDuplicateGroups = useMemo(() => {
-    if (!filterText) {
-      return duplicateGroups;
+    const filteredDuplicateGroups = useMemo(() => {
+    let filtered = duplicateGroups.filter(group => group.similarityScore >= resultsSimilarityFilter);
+
+    if (filterText) {
+      filtered = filtered.filter(group =>
+        group.files.some(file =>
+          file.toLowerCase().includes(filterText.toLowerCase())
+        )
+      );
     }
-    return duplicateGroups.filter(group =>
-      group.files.some(file =>
-        file.toLowerCase().includes(filterText.toLowerCase())
-      )
-    );
-  }, [duplicateGroups, filterText]);
+
+    if (excludeFilterText) {
+        filtered = filtered.filter(group =>
+            !group.files.some(file =>
+                file.toLowerCase().includes(excludeFilterText.toLowerCase())
+            )
+        );
+    }
+    
+    return filtered;
+  }, [duplicateGroups, filterText, resultsSimilarityFilter, excludeFilterText]);
 
 
   const totalSelectedCount = useMemo(() => {
-    return duplicateGroups.reduce((acc, group) => acc + group.selection.size, 0);
-  }, [duplicateGroups]);
+    return filteredDuplicateGroups.reduce((acc, group) => {
+        // Count only selected items that are also in the filtered group
+        let count = 0;
+        for (const selectedFile of group.selection) {
+            if (group.files.includes(selectedFile)) {
+                count++;
+            }
+        }
+        return acc + count;
+    }, 0);
+}, [filteredDuplicateGroups]);
   
   const renderInitialView = () => (
       <Card className="shadow-lg w-full max-w-lg mx-auto">
@@ -228,11 +259,17 @@ export default function AudioDedupe() {
               <FolderSearch className="h-20 w-20 text-primary" />
             </div>
             <h2 className="text-2xl font-bold mb-2">Taramaya Başlayın</h2>
-            <p className="text-muted-foreground mb-6">Yinelenen ses dosyalarını bulmak için müzik klasörünüzü seçin. Yerel, hızlı ve güvenli.</p>
-            <Button size="lg" onClick={handleSelectDirectoryClick} disabled={isPending}>
-              <FolderSearch className="mr-2 h-5 w-5" />
-              Müzik Klasörü Seç
-            </Button>
+            <p className="text-muted-foreground mb-6">Yinelenen ses dosyalarını bulmak için müzik klasör(ler)inizi seçin. Yerel, hızlı ve güvenli.</p>
+            <div className="flex gap-4 justify-center">
+                <Button size="lg" onClick={() => handleSelectDirectory(false)} disabled={isPending}>
+                  <FolderPlus className="mr-2 h-5 w-5" />
+                  Klasör Ekle
+                </Button>
+                <Button size="lg" onClick={() => handleSelectDirectory(true)} disabled={isPending}>
+                  <FolderSearch className="mr-2 h-5 w-5" />
+                  Ana Klasör Ekle
+                </Button>
+            </div>
         </CardContent>
       </Card>
   );
@@ -244,7 +281,7 @@ export default function AudioDedupe() {
             <CardContent className="p-10 text-center">
               <FileScan className="h-20 w-20 text-primary mx-auto mb-6" />
               <h2 className="text-2xl font-bold">Analiz Tamamlandı</h2>
-              <p className="text-muted-foreground">{filterText ? 'Arama kriterlerinize uyan kopya bulunamadı.' : 'Tebrikler! Müzik kütüphanenizde yinelenen dosya bulunamadı.'}</p>
+              <p className="text-muted-foreground">{filterText || excludeFilterText ? 'Arama kriterlerinize uyan kopya bulunamadı.' : 'Tebrikler! Müzik kütüphanenizde yinelenen dosya bulunamadı.'}</p>
             </CardContent>
         </Card>
       );
@@ -273,7 +310,7 @@ export default function AudioDedupe() {
                             </AlertDialogHeader>
                             <AlertDialogFooter>
                                 <AlertDialogCancel>İptal</AlertDialogCancel>
-                                <AlertDialogAction onClick={() => handleDeleteSelected(duplicateGroups)} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">Evet, Sil</AlertDialogAction>
+                                <AlertDialogAction onClick={() => handleDeleteSelected(filteredDuplicateGroups)} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">Evet, Sil</AlertDialogAction>
                             </AlertDialogFooter>
                         </AlertDialogContent>
                     </AlertDialog>
@@ -378,6 +415,13 @@ export default function AudioDedupe() {
           ref={fileInputRef} 
           style={{ display: 'none' }} 
           onChange={handleFileSelect}
+          multiple
+        />
+        <input 
+          type="file" 
+          ref={folderInputRef} 
+          style={{ display: 'none' }} 
+          onChange={handleFileSelect}
           webkitdirectory="true"
           mozdirectory="true"
           multiple
@@ -397,7 +441,7 @@ export default function AudioDedupe() {
                  </SidebarGroupLabel>
                  <div className='p-2 space-y-4'>
                       <div className="space-y-2">
-                        <Label htmlFor="similarity-threshold">Benzerlik Eşiği: {Math.round(similarityThreshold * 100)}%</Label>
+                        <Label htmlFor="similarity-threshold">Analiz Benzerlik Eşiği: {Math.round(similarityThreshold * 100)}%</Label>
                         <Slider
                           id="similarity-threshold"
                           min={0.5}
@@ -407,7 +451,7 @@ export default function AudioDedupe() {
                           onValueChange={(value) => setSimilarityThreshold(value[0])}
                           disabled={isPending || viewState === 'analyzing'}
                         />
-                        <p className="text-xs text-muted-foreground">Daha düşük değerler daha fazla kopya bulur, ancak hatalı olabilir.</p>
+                        <p className="text-xs text-muted-foreground">Analiz için kullanılacak eşik. Düşük değerler daha fazla kopya bulur.</p>
                       </div>
 
                      <Button className="w-full" onClick={handleAnalyze} disabled={isPending || files.length === 0 || viewState === 'analyzing'}>
@@ -416,10 +460,25 @@ export default function AudioDedupe() {
                      </Button>
                      
                      {viewState === 'results' && (
+                        <>
+                            <Separator />
+                             <Label>Sonuç Filtreleri</Label>
+                             <div className="space-y-2">
+                                <Label htmlFor="results-similarity-filter">Sonuç Benzerlik Eşiği: {Math.round(resultsSimilarityFilter * 100)}%</Label>
+                                <Slider
+                                id="results-similarity-filter"
+                                min={0.5}
+                                max={1}
+                                step={0.01}
+                                value={[resultsSimilarityFilter]}
+                                onValueChange={(value) => setResultsSimilarityFilter(value[0])}
+                                />
+                                <p className="text-xs text-muted-foreground">Sonuçları yeni bir eşiğe göre filtreleyin.</p>
+                            </div>
                          <div className="relative">
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                             <Input
-                                placeholder="Sonuçları filtrele..."
+                                placeholder="İçerenleri göster..."
                                 value={filterText}
                                 onChange={(e) => setFilterText(e.target.value)}
                                 className="pl-9"
@@ -435,6 +494,26 @@ export default function AudioDedupe() {
                                 </Button>
                             )}
                         </div>
+                        <div className="relative">
+                            <FilterX className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            <Input
+                                placeholder="İçerenleri gizle..."
+                                value={excludeFilterText}
+                                onChange={(e) => setExcludeFilterText(e.target.value)}
+                                className="pl-9"
+                            />
+                             {excludeFilterText && (
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="absolute right-1 top-1/2 -translate-y-1/2 h-6 w-6"
+                                    onClick={() => setExcludeFilterText('')}
+                                >
+                                    <XCircle className="h-4 w-4" />
+                                </Button>
+                            )}
+                        </div>
+                        </>
                      )}
                  </div>
              </SidebarGroup>
@@ -473,12 +552,18 @@ export default function AudioDedupe() {
              </SidebarGroup>
           </SidebarContent>
            <Separator />
-          <SidebarFooter className='p-4 gap-4'>
-            <Button variant="outline" onClick={handleSelectDirectoryClick} disabled={isPending || viewState === 'analyzing'}>
-                <FolderPlus />
-                Klasör Ekle
-            </Button>
-            <Button variant="ghost" className="text-destructive hover:text-destructive" onClick={clearAllFiles} disabled={files.length === 0 || isPending || viewState === 'analyzing'}>
+          <SidebarFooter className='p-4 gap-2 flex-col'>
+            <div className="flex gap-2">
+                <Button variant="outline" className="flex-1" onClick={() => handleSelectDirectory(false)} disabled={isPending || viewState === 'analyzing'}>
+                    <FolderPlus />
+                    Klasör
+                </Button>
+                <Button variant="outline" className="flex-1" onClick={() => handleSelectDirectory(true)} disabled={isPending || viewState === 'analyzing'}>
+                    <FolderSearch />
+                    Ana Klasör
+                </Button>
+            </div>
+            <Button variant="ghost" className="text-destructive hover:text-destructive w-full" onClick={clearAllFiles} disabled={files.length === 0 || isPending || viewState === 'analyzing'}>
                 <FileX2 />
                 Listeyi Temizle
             </Button>
@@ -510,3 +595,5 @@ export default function AudioDedupe() {
     </SidebarProvider>
   );
 }
+
+    
