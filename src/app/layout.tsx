@@ -3,7 +3,7 @@ import './globals.css';
 import { Toaster } from "@/components/ui/toaster"
 
 export const metadata: Metadata = {
-  title: 'Audio Dedupe Pro',
+  title: 'AudioDebupe',
   description: 'Müzik kütüphanenizdeki yinelenen dosyaları bulun ve temizleyin.',
 };
 
