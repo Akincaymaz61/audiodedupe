@@ -21,7 +21,6 @@ import { findDuplicateGroupsLocally } from '@/lib/local-analyzer';
 import { FolderSearch, FileScan, Trash2, Loader2, Music2, Folder, AlertTriangle, Info, FolderPlus } from 'lucide-react';
 import type { AppFile, DuplicateGroupWithSelection } from '@/lib/types';
 import { Logo } from './logo';
-import { ScrollArea } from './ui/scroll-area';
 import { Badge } from './ui/badge';
 
 const AUDIO_EXTENSIONS = /\.(mp3|wav|flac|m4a|ogg|aac|aiff)$/i;
@@ -105,7 +104,8 @@ export default function AudioDedupe() {
           .map((group, index) => {
             const selection = new Set(group.files.slice(1));
             return { ...group, id: `group-${index}`, selection };
-          });
+          })
+          .sort((a, b) => b.similarityScore - a.similarityScore); // Sort by similarity descending
 
         setDuplicateGroups(groupsWithSelection);
         if (groupsWithSelection.length === 0) {
@@ -216,34 +216,32 @@ export default function AudioDedupe() {
                   </AccordionTrigger>
                   <AccordionContent className="p-0">
                     <div className="border-t">
-                      <ScrollArea className="h-full max-h-[300px]">
-                        <ul className="p-4 space-y-3">
-                          {group.files.map(filePath => {
-                            const fileName = filePath.split('/').pop() || filePath;
-                            const dirPath = filePath.substring(0, filePath.lastIndexOf('/')) || '/';
-                            return (
-                                <li key={filePath} className="flex items-center gap-4 p-2 rounded-md hover:bg-muted/50 transition-colors">
-                                <Checkbox
-                                    id={`${group.id}-${filePath}`}
-                                    checked={group.selection.has(filePath)}
-                                    onCheckedChange={() => handleToggleSelection(group.id, filePath)}
-                                    aria-label={`Dosyayı seç ${filePath}`}
-                                />
-                                <div className="flex-1 overflow-hidden">
-                                    <label htmlFor={`${group.id}-${filePath}`} className="font-medium flex items-center gap-2 cursor-pointer truncate">
-                                    <Music2 className="w-4 h-4 text-primary flex-shrink-0" />
-                                    <span className="truncate" title={fileName}>{fileName}</span>
-                                    </label>
-                                    <p className="text-xs text-muted-foreground flex items-center gap-2 mt-1 truncate">
-                                    <Folder className="w-3 h-3 flex-shrink-0" />
-                                    <span className="truncate" title={dirPath}>{dirPath}</span>
-                                    </p>
-                                </div>
-                                </li>
-                            );
-                          })}
-                        </ul>
-                      </ScrollArea>
+                      <ul className="p-4 space-y-3">
+                        {group.files.map(filePath => {
+                          const fileName = filePath.split('/').pop() || filePath;
+                          const dirPath = filePath.substring(0, filePath.lastIndexOf('/')) || '/';
+                          return (
+                              <li key={filePath} className="flex items-center gap-4 p-2 rounded-md hover:bg-muted/50 transition-colors">
+                              <Checkbox
+                                  id={`${group.id}-${filePath}`}
+                                  checked={group.selection.has(filePath)}
+                                  onCheckedChange={() => handleToggleSelection(group.id, filePath)}
+                                  aria-label={`Dosyayı seç ${filePath}`}
+                              />
+                              <div className="flex-1 overflow-hidden">
+                                  <label htmlFor={`${group.id}-${filePath}`} className="font-medium flex items-center gap-2 cursor-pointer truncate">
+                                  <Music2 className="w-4 h-4 text-primary flex-shrink-0" />
+                                  <span className="truncate" title={fileName}>{fileName}</span>
+                                  </label>
+                                  <p className="text-xs text-muted-foreground flex items-center gap-2 mt-1 truncate">
+                                  <Folder className="w-3 h-3 flex-shrink-0" />
+                                  <span className="truncate" title={dirPath}>{dirPath}</span>
+                                  </p>
+                              </div>
+                              </li>
+                          );
+                        })}
+                      </ul>
                       <div className="p-4 border-t bg-muted/30 flex justify-end">
                         <AlertDialog>
                           <AlertDialogTrigger asChild>
