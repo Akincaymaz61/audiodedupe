@@ -52,8 +52,8 @@ export default function AudioDedupe() {
   const [loadingMessage, setLoadingMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const recursiveFolderInputRef = useRef<HTMLInputElement>(null);
   const [viewState, setViewState] = useState<ViewState>('initial');
   const [similarityThreshold, setSimilarityThreshold] = useState(0.85);
   const [filterText, setFilterText] = useState('');
@@ -64,9 +64,9 @@ export default function AudioDedupe() {
 
   const handleSelectDirectory = (recursive = false) => {
     if (recursive) {
-        folderInputRef.current?.click();
+        recursiveFolderInputRef.current?.click();
     } else {
-        fileInputRef.current?.click();
+        folderInputRef.current?.click();
     }
   };
 
@@ -226,13 +226,16 @@ export default function AudioDedupe() {
         )
       );
     }
-
+    
     if (excludeFilterText) {
-        filtered = filtered.filter(group =>
-            !group.files.some(file =>
-                file.toLowerCase().includes(excludeFilterText.toLowerCase())
-            )
-        );
+        const excludeKeywords = excludeFilterText.toLowerCase().split(' ').filter(k => k);
+        if (excludeKeywords.length > 0) {
+            filtered = filtered.filter(group =>
+                !group.files.some(file =>
+                    excludeKeywords.some(keyword => file.toLowerCase().includes(keyword))
+                )
+            );
+        }
     }
     
     return filtered;
@@ -412,14 +415,15 @@ export default function AudioDedupe() {
     <SidebarProvider>
        <input 
           type="file" 
-          ref={fileInputRef} 
+          ref={folderInputRef} 
           style={{ display: 'none' }} 
           onChange={handleFileSelect}
-          multiple
+          webkitdirectory="true"
+          mozdirectory="true"
         />
         <input 
           type="file" 
-          ref={folderInputRef} 
+          ref={recursiveFolderInputRef} 
           style={{ display: 'none' }} 
           onChange={handleFileSelect}
           webkitdirectory="true"
