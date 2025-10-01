@@ -1,8 +1,8 @@
-# AudioDebupe
+# AduioDedupe
 
-**AudioDebupe**, müzik kütüphanenizdeki yinelenen ve benzer ses dosyalarını bulup temizlemek için tasarlanmış modern ve hızlı bir web uygulamasıdır. Yerel olarak çalışır, dosyalarınızı gizli tutar ve büyük koleksiyonları bile saniyeler içinde analiz eder.
+**AduioDedupe**, müzik kütüphanenizdeki yinelenen ve benzer ses dosyalarını bulup temizlemek için tasarlanmış modern ve hızlı bir web uygulamasıdır. Yerel olarak çalışır, dosyalarınızı gizli tutar ve büyük koleksiyonları bile saniyeler içinde analiz eder.
 
-![AudioDebupe Screenshot](https://storage.googleapis.com/studiopaper-assets/audiodebupe-screenshot.png)
+![AduioDedupe Screenshot](https://storage.googleapis.com/studiopaper-assets/audiodebupe-screenshot.png)
 
 ## ✨ Temel Özellikler
 
