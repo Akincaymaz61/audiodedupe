@@ -67,6 +67,25 @@ const sortOptions: Record<SortOption, string> = {
 };
 
 
+async function getFilesFromDirectory(dirHandle: FileSystemDirectoryHandle, recursive: boolean, path = ''): Promise<AppFile[]> {
+    const files: AppFile[] = [];
+    for await (const entry of dirHandle.values()) {
+        const newPath = path ? `${path}/${entry.name}` : entry.name;
+        if (entry.kind === 'file' && AUDIO_EXTENSIONS.test(entry.name)) {
+            files.push({
+                handle: entry,
+                parentHandle: dirHandle,
+                name: entry.name,
+                path: newPath,
+                basePath: path || dirHandle.name,
+            });
+        } else if (entry.kind === 'directory' && recursive) {
+            files.push(...(await getFilesFromDirectory(entry, recursive, newPath)));
+        }
+    }
+    return files;
+}
+
 export default function AudioDedupe() {
   const [files, setFiles] = useState<AppFile[]>([]);
   const [fileObjects, setFileObjects] = useState<Map<string, File>>(new Map());
@@ -75,8 +94,6 @@ export default function AudioDedupe() {
   const [loadingMessage, setLoadingMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
-  const folderInputRef = useRef<HTMLInputElement>(null);
-  const recursiveFolderInputRef = useRef<HTMLInputElement>(null);
   const [viewState, setViewState] = useState<ViewState>('initial');
   const [similarityThreshold, setSimilarityThreshold] = useState(0.85);
   const [filterText, setFilterText] = useState('');
@@ -95,87 +112,51 @@ export default function AudioDedupe() {
 
   const { toast } = useToast();
 
-  const handleSelectDirectory = (recursive = false) => {
-    if (recursive) {
-        recursiveFolderInputRef.current?.click();
-    } else {
-        folderInputRef.current?.click();
-    }
-  };
+    const handleSelectDirectory = async (recursive = false) => {
+        if (!window.showDirectoryPicker) {
+            setError("Tarayıcınız bu özelliği desteklemiyor. Lütfen Chrome, Edge veya Opera'nın güncel bir sürümünü kullanın.");
+            return;
+        }
 
+        try {
+            const dirHandle = await window.showDirectoryPicker();
+            setError(null);
+            setLoadingMessage('Ses dosyaları taranıyor...');
+            setViewState('analyzing');
 
-  const processFiles = useCallback((selectedFiles: FileList, isRecursive: boolean) => {
-    setError(null);
-    setLoadingMessage('Ses dosyaları taranıyor...');
-    setViewState('analyzing');
+            startTransition(async () => {
+                const newAppFiles = await getFilesFromDirectory(dirHandle, recursive, dirHandle.name);
+                
+                if (newAppFiles.length > 0) {
+                    const existingPaths = new Set(files.map(f => f.path));
+                    const uniqueNewFiles = newAppFiles.filter(f => !existingPaths.has(f.path));
+                    
+                    if (uniqueNewFiles.length > 0) {
+                        setFiles(prevFiles => [...prevFiles, ...uniqueNewFiles].sort((a,b) => a.path.localeCompare(b.path)));
+                        toast({ title: `${uniqueNewFiles.length} yeni dosya eklendi`, description: `Toplam ${files.length + uniqueNewFiles.length} dosya analize hazır.` });
+                    } else {
+                        toast({ title: "Yeni dosya eklenmedi", description: "Seçilen klasördeki dosyalar zaten listede mevcut.", variant: "default" });
+                    }
+                }
+                
+                setDuplicateGroups([]);
+                setViewState('files_selected');
+                setLoadingMessage('');
 
-    startTransition(() => {
-        const newFileObjects = new Map(fileObjects);
-        const newAppFiles: AppFile[] = [];
-        
-        let basePathSet = new Set<string>();
-        if (selectedFiles.length > 0 && selectedFiles[0].webkitRelativePath) {
-            const pathParts = selectedFiles[0].webkitRelativePath.split('/');
-            if (isRecursive && pathParts.length > 1) {
-                basePathSet.add(pathParts[0]);
+                if (files.length + newAppFiles.length === 0) {
+                    setError("Seçilen dizinde desteklenen formatta ses dosyası bulunamadı.");
+                    setViewState('initial');
+                }
+            });
+        } catch (err) {
+            if ((err as Error).name !== 'AbortError') {
+                 console.error('Klasör seçme hatası:', err);
+                 setError(`Klasör seçilemedi: ${(err as Error).message}`);
             }
+            setViewState(files.length > 0 ? 'files_selected' : 'initial');
+            setLoadingMessage('');
         }
-        const basePath = basePathSet.size > 0 ? Array.from(basePathSet)[0] : '';
-        
-        Array.from(selectedFiles).forEach(file => {
-          if (AUDIO_EXTENSIONS.test(file.name)) {
-            const relativePath = file.webkitRelativePath || file.name;
-            if (!newFileObjects.has(relativePath)) {
-              newFileObjects.set(relativePath, file);
-              
-              let fileBasePath = '';
-              const pathParts = relativePath.split('/');
-
-              if (isRecursive) {
-                  fileBasePath = pathParts.length > 1 ? pathParts.slice(0, -1).join('/') : basePath;
-              } else {
-                 if (pathParts.length > 1) {
-                    fileBasePath = pathParts.slice(0, -1).join('/');
-                 }
-              }
-
-              newAppFiles.push({
-                  handle: { name: file.name, kind: 'file' } as unknown as FileSystemFileHandle,
-                  parentHandle: { name: '', kind: 'directory' } as unknown as FileSystemDirectoryHandle,
-                  name: file.name,
-                  path: relativePath,
-                  basePath: fileBasePath || 'Bilinmeyen Klasör',
-              });
-            }
-          }
-        });
-
-        if (newAppFiles.length > 0) {
-          setFiles(prevFiles => [...prevFiles, ...newAppFiles].sort((a,b) => a.path.localeCompare(b.path)));
-          setFileObjects(newFileObjects);
-        }
-        
-        setDuplicateGroups([]);
-        setViewState('files_selected');
-        setLoadingMessage('');
-
-        if (files.length + newAppFiles.length === 0) {
-            setError("Seçilen dizinde desteklenen formatta ses dosyası bulunamadı.");
-            setViewState('initial');
-        } else {
-             toast({ title: `${newAppFiles.length} yeni dosya eklendi`, description: `Toplam ${files.length + newAppFiles.length} dosya analize hazır.` });
-        }
-    });
-  }, [files, fileObjects, toast]);
-
-  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>, isRecursive: boolean) => {
-    const selectedFiles = event.target.files;
-    if (selectedFiles && selectedFiles.length > 0) {
-        processFiles(selectedFiles, isRecursive);
-    }
-    // Input'u temizle, böylece aynı klasör tekrar seçilebilir
-    event.target.value = '';
-  };
+    };
   
   const readMetadata = (file: File): Promise<FileWithMetadata> => {
       return new Promise((resolve) => {
@@ -185,7 +166,7 @@ export default function AudioDedupe() {
                 resolve({
                     path: (file as any).webkitRelativePath || file.name,
                     size: file.size,
-                    bitrate: v2 && v2.TLEN ? parseInt(v2.TLEN, 10) / 8192 : 0,
+                    bitrate: (v2 && v2.TLEN) ? parseInt(v2.TLEN, 10) / 8192 : 0,
                 });
             },
             onError: () => {
@@ -208,13 +189,30 @@ export default function AudioDedupe() {
     setViewState('analyzing');
     setAnalysisProgress(0);
     setError(null);
-    
     setLoadingMessage('Meta veriler okunuyor...');
-    
-    const filesToRead = Array.from(fileObjects.values()).filter(file => {
-        const path = (file as any).webkitRelativePath || file.name;
-        return !filesWithMetadata.has(path);
-    });
+
+    const filesToRead: File[] = [];
+    const newFileObjects = new Map<string, File>();
+
+    try {
+        const filePromises = files
+            .filter(appFile => !fileObjects.has(appFile.path))
+            .map(async (appFile) => {
+                const file = await appFile.handle.getFile();
+                filesToRead.push(file);
+                newFileObjects.set(appFile.path, file);
+            });
+        
+        await Promise.all(filePromises);
+        setFileObjects(prev => new Map([...prev, ...newFileObjects]));
+
+    } catch (e) {
+        const errorMessage = e instanceof Error ? e.message : 'Dosya okuma sırasında beklenmedik bir hata oluştu.';
+        setError(`Dosyalara erişirken bir hata oluştu: ${errorMessage}. Lütfen klasör izinlerini kontrol edin.`);
+        toast({ title: "Dosya Erişim Hatası", description: errorMessage, variant: "destructive" });
+        setViewState('files_selected');
+        return;
+    }
 
     const metadataPromises = filesToRead.map(file => readMetadata(file));
     
@@ -222,7 +220,7 @@ export default function AudioDedupe() {
     metadataPromises.forEach(p => {
         p.then(() => {
             completed++;
-            const progress = (completed / metadataPromises.length) * 50; // Meta okuma ilk %50'yi kaplar
+            const progress = (completed / metadataPromises.length) * 50; 
             setAnalysisProgress(progress);
         });
     });
@@ -313,12 +311,83 @@ export default function AudioDedupe() {
   };
 
   const handleDeleteSelected = async (groupsToDeleteFrom: DuplicateGroupWithSelection[]) => {
-    toast({
-        title: "Silme işlemi uygulanamadı",
-        description: "Bu dosya seçim yöntemiyle (klasör ekle) dosya silme desteklenmemektedir.",
-        variant: "destructive",
-    });
-    console.warn("File deletion was attempted, but it is not implemented for the input[type=file] method.");
+      const filesToDelete = new Map<string, AppFile>();
+      const allFilesMap = new Map(files.map(f => [f.path, f]));
+
+      for (const group of groupsToDeleteFrom) {
+          for (const path of group.selection) {
+              const file = allFilesMap.get(path);
+              if (file && !filesToDelete.has(path)) {
+                  filesToDelete.set(path, file);
+              }
+          }
+      }
+
+      if (filesToDelete.size === 0) {
+          toast({ title: "Silinecek dosya seçilmedi", variant: "default" });
+          return;
+      }
+      
+      let deletedCount = 0;
+      let errorCount = 0;
+      
+      const parentHandles = new Set<FileSystemDirectoryHandle>();
+      filesToDelete.forEach(file => parentHandles.add(file.parentHandle));
+      
+      try {
+          for(const handle of parentHandles){
+             const permission = await handle.queryPermission({ mode: 'readwrite' });
+             if (permission !== 'granted') {
+                const request = await handle.requestPermission({ mode: 'readwrite' });
+                if(request !== 'granted'){
+                    throw new Error("Dosyaları silmek için gerekli izin verilmedi.");
+                }
+             }
+          }
+
+          const deletionPromises = Array.from(filesToDelete.values()).map(async (file) => {
+              try {
+                  await file.parentHandle.removeEntry(file.name);
+                  deletedCount++;
+              } catch (e) {
+                  console.error(`Dosya silinemedi: ${file.path}`, e);
+                  errorCount++;
+              }
+          });
+
+          await Promise.all(deletionPromises);
+          
+          toast({
+              title: "Silme İşlemi Tamamlandı",
+              description: `${deletedCount} dosya başarıyla silindi. ${errorCount > 0 ? `${errorCount} dosya silinemedi.` : ''}`
+          });
+          
+          // Update state after deletion
+          const remainingFilePaths = new Set(Array.from(filesToDelete.keys()));
+          setFiles(prev => prev.filter(f => !remainingFilePaths.has(f.path)));
+          setDuplicateGroups(prev => 
+              prev.map(g => ({
+                  ...g,
+                  files: g.files.filter(f => !remainingFilePaths.has(f)),
+                  selection: new Set([...g.selection].filter(f => !remainingFilePaths.has(f)))
+              })).filter(g => g.files.length > 1)
+          );
+          setFileObjects(prev => {
+              const newMap = new Map(prev);
+              remainingFilePaths.forEach(path => newMap.delete(path));
+              return newMap;
+          });
+          setFilesWithMetadata(prev => {
+              const newMap = new Map(prev);
+              remainingFilePaths.forEach(path => newMap.delete(path));
+              return newMap;
+          });
+
+      } catch (e) {
+          const errorMessage = e instanceof Error ? e.message : "Bilinmeyen bir hata oluştu.";
+          setError(`Dosyaları silerken bir hata oluştu: ${errorMessage}`);
+          toast({ title: "Silme Hatası", description: errorMessage, variant: "destructive" });
+      }
   };
   
   const clearAllFiles = () => {
@@ -335,7 +404,7 @@ export default function AudioDedupe() {
   const selectedFoldersWithCounts = useMemo(() => {
     const folderMap = new Map<string, number>();
     files.forEach(file => {
-      const path = file.basePath || 'Bilinmeyen Klasör';
+      const path = file.basePath;
       folderMap.set(path, (folderMap.get(path) || 0) + 1);
     });
     return Array.from(folderMap.entries())
@@ -350,15 +419,15 @@ export default function AudioDedupe() {
 
   const removeFolder = useCallback((folderPathToRemove: string) => {
       const newFiles = files.filter(file => file.basePath !== folderPathToRemove);
+      const pathsToRemove = new Set(files.filter(file => file.basePath === folderPathToRemove).map(f => f.path));
+
       const newFileObjects = new Map(fileObjects);
       const newFilesWithMetadata = new Map(filesWithMetadata);
-
-      for (const file of files) {
-        if (file.basePath === folderPathToRemove) {
-          newFileObjects.delete(file.path);
-          newFilesWithMetadata.delete(file.path);
-        }
-      }
+      
+      pathsToRemove.forEach(path => {
+          newFileObjects.delete(path);
+          newFilesWithMetadata.delete(path);
+      });
 
       setFiles(newFiles);
       setFileObjects(newFileObjects);
@@ -419,7 +488,7 @@ export default function AudioDedupe() {
     return filteredDuplicateGroups.reduce((acc, group) => acc + group.selection.size, 0);
   }, [filteredDuplicateGroups]);
 
-    const handlePlayPause = (filePath: string) => {
+    const handlePlayPause = async (filePath: string) => {
         if (currentlyPlaying?.path === filePath) {
             if (audioRef.current) {
                 if (audioRef.current.paused) {
@@ -432,10 +501,25 @@ export default function AudioDedupe() {
             if (currentlyPlaying) {
                 URL.revokeObjectURL(currentlyPlaying.url);
             }
+            
             const file = fileObjects.get(filePath);
             if (file) {
                 const url = URL.createObjectURL(file);
                 setCurrentlyPlaying({ path: filePath, url });
+            } else {
+                const appFile = files.find(f => f.path === filePath);
+                if(appFile) {
+                    try {
+                        const fileBlob = await appFile.handle.getFile();
+                        const newFileObjects = new Map(fileObjects);
+                        newFileObjects.set(filePath, fileBlob);
+                        setFileObjects(newFileObjects);
+                        const url = URL.createObjectURL(fileBlob);
+                        setCurrentlyPlaying({ path: filePath, url });
+                    } catch (e) {
+                         toast({ title: "Oynatma Hatası", description: "Dosya okunurken bir hata oluştu.", variant: "destructive" });
+                    }
+                }
             }
         }
     };
@@ -800,24 +884,6 @@ export default function AudioDedupe() {
   
   return (
     <SidebarProvider>
-       <input 
-          type="file" 
-          ref={folderInputRef} 
-          style={{ display: 'none' }} 
-          onChange={(e) => handleFileSelect(e, false)}
-          webkitdirectory="true"
-          mozdirectory="true"
-          multiple
-        />
-        <input 
-          type="file" 
-          ref={recursiveFolderInputRef} 
-          style={{ display: 'none' }} 
-          onChange={(e) => handleFileSelect(e, true)}
-          webkitdirectory="true"
-          mozdirectory="true"
-          multiple
-        />
       <Sidebar collapsible="icon" className="border-r">
           <SidebarHeader className='p-4'>
              <div className="flex items-center gap-2">
