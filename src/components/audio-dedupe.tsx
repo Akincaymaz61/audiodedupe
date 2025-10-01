@@ -167,7 +167,7 @@ export default function AudioDedupe() {
                 resolve({
                     path: (file as any).webkitRelativePath || file.name,
                     size: file.size,
-                    bitrate: v2 && v2.TLEN ? v2.TLEN / 8192 : 0, // Simplified bitrate estimation
+                    bitrate: v2 && v2.TLEN ? parseInt(v2.TLEN, 10) / 8192 : 0,
                 });
             },
             onError: () => {
@@ -193,22 +193,33 @@ export default function AudioDedupe() {
     
     // Meta verileri okuma işlemi (tarayıcıda kalır)
     setLoadingMessage('Meta veriler okunuyor...');
-    const metadataMap = new Map<string, FileWithMetadata>();
-    const filesToRead = Array.from(fileObjects.values());
-    for (let i = 0; i < filesToRead.length; i++) {
-        const file = filesToRead[i];
+    
+    const filesToRead = Array.from(fileObjects.values()).filter(file => {
         const path = (file as any).webkitRelativePath || file.name;
-        if (!filesWithMetadata.has(path)) {
-            const meta = await readMetadata(file);
-            metadataMap.set(path, meta);
-        } else {
-            metadataMap.set(path, filesWithMetadata.get(path)!);
-        }
-        setAnalysisProgress(50 * ((i + 1) / filesToRead.length)); // Meta okuma ilk %50'yi kaplar
-    }
-    setFilesWithMetadata(prev => new Map([...prev, ...metadataMap]));
+        return !filesWithMetadata.has(path);
+    });
 
+    const metadataPromises = filesToRead.map(file => readMetadata(file));
+    
+    // Paralel meta veri okuma ve ilerleme takibi
+    let completed = 0;
+    metadataPromises.forEach(p => {
+        p.then(() => {
+            completed++;
+            const progress = (completed / metadataPromises.length) * 50; // Meta okuma ilk %50'yi kaplar
+            setAnalysisProgress(progress);
+        });
+    });
+
+    const allMetadata = await Promise.all(metadataPromises);
+    
+    const newMetadataMap = new Map<string, FileWithMetadata>();
+    allMetadata.forEach(meta => newMetadataMap.set(meta.path, meta));
+    setFilesWithMetadata(prev => new Map([...prev, ...newMetadataMap]));
+
+    setAnalysisProgress(50);
     setLoadingMessage('Benzer dosya adları sunucuda analiz ediliyor...');
+
     try {
         const allFilePaths = files.map(f => f.path);
         // Sunucuya sadece dosya yollarının listesini gönder
