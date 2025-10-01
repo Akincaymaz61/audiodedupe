@@ -52,6 +52,165 @@ type ViewState = 'initial' | 'files_selected' | 'analyzing' | 'results';
 type SelectionStrategy = 'none' | 'keep_highest_quality' | 'keep_lowest_quality' | 'keep_shortest_name';
 
 
+// Levenshtein mesafesi hesaplama fonksiyonu
+function calculateLevenshtein(a: string, b: string): number {
+    const an = a ? a.length : 0;
+    const bn = b ? b.length : 0;
+    if (an === 0) return bn;
+    if (bn === 0) return an;
+    const matrix = new Array<number[]>(bn + 1);
+    for (let i = 0; i <= bn; ++i) {
+        let row = matrix[i] = new Array<number>(an + 1);
+        row[0] = i;
+    }
+    const firstRow = matrix[0];
+    for (let j = 1; j <= an; ++j) {
+        firstRow[j] = j;
+    }
+    for (let i = 1; i <= bn; ++i) {
+        for (let j = 1; j <= an; ++j) {
+            if (b.charAt(i - 1) === a.charAt(j - 1)) {
+                matrix[i][j] = matrix[i - 1][j - 1];
+            } else {
+                matrix[i][j] = Math.min(
+                    matrix[i - 1][j - 1] + 1, // substitution
+                    matrix[i][j - 1] + 1,     // insertion
+                    matrix[i - 1][j] + 1      // deletion
+                );
+            }
+        }
+    }
+    return matrix[bn][an];
+}
+
+// İki string arasındaki benzerlik oranını hesaplar
+function calculateSimilarity(s1: string, s2: string): number {
+    if (!s1 || !s2) return 0;
+    const longer = s1.length > s2.length ? s1 : s2;
+    const shorter = s1.length > s2.length ? s2 : s1;
+    if (longer.length === 0) {
+        return 1.0;
+    }
+    const distance = calculateLevenshtein(longer, shorter);
+    return (longer.length - distance) / longer.length;
+}
+
+const VERSION_MARKERS = [
+    'remix', 'live', 'acoustic', 'instrumental', 'radio edit', 
+    'reprise', 'bonus', 'demo', 'alternate version', 'unplugged',
+    'rehearsal', 'soundcheck', 'extended', 'club mix', 'original mix',
+    'edit', 'version', 'dub'
+];
+
+// Dosya adını normalize eder
+function normalizeFileName(filePath: string): string {
+    let name = (filePath.split('/').pop() || '').toLowerCase();
+    
+    // Dosya uzantısını kaldır
+    name = name.substring(0, name.lastIndexOf('.')) || name;
+    
+    // Özel son ekleri temizle
+    name = name.replace(/_pn$/, '').trim();
+
+    // Sanatçı ve şarkı adını ayırmaya çalış
+    const parts = name.split(' - ');
+    let artistAndTitle: string;
+
+    // "10A - 125 - Artist - Title" gibi kalıpları işle
+    if (parts.length >= 3) {
+        const isCamelot = /^\d{1,2}[ab]$/.test(parts[0].trim());
+        const isBpm = /^\d{2,3}$/.test(parts[1].trim());
+
+        if (isCamelot && isBpm && parts.length >= 4) {
+            artistAndTitle = parts.slice(2).join(' ');
+        } else if (isCamelot) {
+            artistAndTitle = parts.slice(1).join(' ');
+        } else {
+            artistAndTitle = parts.join(' ');
+        }
+    } else {
+        artistAndTitle = name;
+    }
+
+    // Parantez içindeki versiyon bilgilerini temizle
+    let finalName = artistAndTitle.replace(/[\[(](.*?)[\])]/g, (match, content) => {
+        const potentialVersion = content.toLowerCase().trim();
+        if (VERSION_MARKERS.some(marker => potentialVersion.includes(marker))) {
+            return ''; // Versiyon bilgisi içeriyorsa kaldır
+        }
+        return match; // İçermiyorsa koru
+    }).trim();
+    
+    // Kalan versiyon belirteçlerini temizle
+    for (const marker of VERSION_MARKERS) {
+        const regex = new RegExp(`\\b${marker}\\b`, 'gi');
+        finalName = finalName.replace(regex, '');
+    }
+
+    // Özel karakterleri ve fazla boşlukları temizle
+    finalName = finalName.replace(/[^\w\s\d]/gi, ' ').replace(/\s+/g, ' ').trim();
+    // Sondaki sayıları temizle (genellikle parça numarası)
+    finalName = finalName.replace(/-\s*\d{1,3}\s*$/, '').trim();
+    finalName = finalName.replace(/\s+\d{1,3}$/, '').trim();
+
+    return finalName;
+}
+
+function findDuplicateGroupsLocally(filePaths: string[], similarityThreshold: number): DuplicateGroup[] {
+  const filesWithNormalizedNames = filePaths.map(path => ({
+      path,
+      normalized: normalizeFileName(path)
+  }));
+  
+  const groups: Map<string, string[]> = new Map();
+  const checkedPaths = new Set<string>();
+
+  for (let i = 0; i < filesWithNormalizedNames.length; i++) {
+      const fileA = filesWithNormalizedNames[i];
+      
+      if (checkedPaths.has(fileA.path) || !fileA.normalized) {
+          continue;
+      }
+
+      const newGroup = [fileA.path];
+      
+      for (let j = i + 1; j < filesWithNormalizedNames.length; j++) {
+          const fileB = filesWithNormalizedNames[j];
+          if (checkedPaths.has(fileB.path) || !fileB.normalized) {
+              continue;
+          }
+          
+          const similarity = calculateSimilarity(fileA.normalized, fileB.normalized);
+
+          if (similarity >= similarityThreshold) {
+              newGroup.push(fileB.path);
+              checkedPaths.add(fileB.path);
+          }
+      }
+
+      if (newGroup.length > 1) {
+          checkedPaths.add(fileA.path);
+          groups.set(fileA.path, newGroup);
+      }
+  }
+
+  return Array.from(groups.values()).map((files) => {
+      const firstFileNormalized = normalizeFileName(files[0]);
+      let score = 0;
+      if (files.length > 1) {
+          const secondFileNormalized = normalizeFileName(files[1]);
+          score = calculateSimilarity(firstFileNormalized, secondFileNormalized);
+      }
+
+      return {
+          files: files.sort(),
+          reason: `Dosya adları "${firstFileNormalized}" adına benziyor.`,
+          similarityScore: score,
+      };
+  }).filter(group => group.files.length > 1);
+}
+
+
 export default function AudioDedupe() {
   const [files, setFiles] = useState<AppFile[]>([]);
   const [fileObjects, setFileObjects] = useState<Map<string, File>>(new Map());
@@ -201,7 +360,6 @@ export default function AudioDedupe() {
 
     const metadataPromises = filesToRead.map(file => readMetadata(file));
     
-    // Paralel meta veri okuma ve ilerleme takibi
     let completed = 0;
     metadataPromises.forEach(p => {
         p.then(() => {
@@ -218,28 +376,16 @@ export default function AudioDedupe() {
     setFilesWithMetadata(prev => new Map([...prev, ...newMetadataMap]));
 
     setAnalysisProgress(50);
-    setLoadingMessage('Benzer dosya adları sunucuda analiz ediliyor...');
+    setLoadingMessage('Benzer dosyalar analiz ediliyor...');
 
     try {
         const allFilePaths = files.map(f => f.path);
-        // Sunucuya sadece dosya yollarının listesini gönder
-        const response = await fetch('/api/analyze', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                filePaths: allFilePaths,
-                similarityThreshold,
-            }),
-        });
+        
+        // Simulating async work for analysis progress
+        await new Promise(resolve => setTimeout(resolve, 100));
+        setAnalysisProgress(75);
 
-        setAnalysisProgress(75); // Sunucu analizi aşaması
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || 'Sunucu analizi sırasında bir hata oluştu.');
-        }
-
-        const groups: DuplicateGroup[] = await response.json();
+        const groups = findDuplicateGroupsLocally(allFilePaths, similarityThreshold);
         
         const groupsWithSelection = groups
             .map((group, index) => ({
@@ -254,7 +400,7 @@ export default function AudioDedupe() {
         setAnalysisProgress(100);
         
         const initiallyOpen = groupsWithSelection
-            .filter(g => g.files.length === 2) // Sadece 2 dosyalık grupları başlangıçta aç
+            .filter(g => g.files.length === 2)
             .map(g => g.id);
         setOpenAccordionItems(initiallyOpen);
         
@@ -271,7 +417,7 @@ export default function AudioDedupe() {
         const errorMessage = e instanceof Error ? e.message : 'Analiz sırasında beklenmedik bir hata oluştu.';
         setError(errorMessage);
         toast({ title: "Analiz Hatası", description: errorMessage, variant: "destructive" });
-        setViewState('results'); // Sonuçları göstermek için state'i ayarla, hata olsa bile
+        setViewState('results');
         setLoadingMessage('');
     }
   };
@@ -507,7 +653,7 @@ export default function AudioDedupe() {
               <FolderSearch className="h-20 w-20 text-primary" />
             </div>
             <h2 className="text-2xl font-bold mb-2">Taramaya Başlayın</h2>
-            <p className="text-muted-foreground mb-6">Yinelenen ses dosyalarını bulmak için müzik klasör(ler)inizi seçin. Analiz sunucuda yapılır, hızlı ve güvenlidir.</p>
+            <p className="text-muted-foreground mb-6">Yinelenen ses dosyalarını bulmak için müzik klasör(ler)inizi seçin. Tüm analizler tarayıcınızda, yerel olarak yapılır.</p>
             <div className="flex gap-4 justify-center">
                 <Button size="lg" onClick={() => handleSelectDirectory(false)} disabled={isPending}>
                   <FolderPlus className="mr-2 h-5 w-5" />
