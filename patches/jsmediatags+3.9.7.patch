@@ -1,0 +1,40 @@
+patch-package
+--- a/node_modules/jsmediatags/build2/ReactNativeFileReader.js
++++ b/node_modules/jsmediatags/build2/ReactNativeFileReader.js
+@@ -24,7 +24,7 @@
+ 
+ function _defineProperty(obj, key, value) { if (key in obj) { Object.defineProperty(obj, key, { value: value, enumerable: true, configurable: true, writable: true }); } else { obj[key] = value; } return obj; }
+ 
+-var RNFS = require('react-native-fs');
++// var RNFS = require('react-native-fs');
+ 
+ var _require = require('buffer'),
+     Buffer = _require.Buffer;
+@@ -40,7 +40,7 @@
+   _createClass(ReactNativeFileReader, [{
+     key: "load",
+     value: function load() {
+-      var _this = this;
++      // var _this = this;
+ 
+       // PATCH: The following was causing a crash in Expo.
+       // The promise was not being returned, and the callback was being called
+@@ -53,6 +53,9 @@
+       //     _this._callbacks.onSuccess(tags);
+       //   });
+       // });
++      if (this._callbacks.onSuccess) {
++        this._callbacks.onSuccess({});
++      }
+     }
+   }, {
+     key: "getFileSize",
+@@ -62,7 +65,7 @@
+     }
+   }, {
+     key: "getByteAt",
+-    value: function getByteAt(offset) {
++    value: function getByteAt(offset) { // eslint-disable-line no-unused-vars
+       return -1;
+     }
+     /**

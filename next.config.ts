@@ -30,22 +30,6 @@ const nextConfig: NextConfig = {
       },
     ],
   },
-  webpack: (config, { isServer }) => {
-    // 'react-native-fs' modülünü çözmeye çalışmasını engelle
-    // jsmediatags kütüphanesi bunu gerektiriyor ama sadece RN ortamında
-    config.resolve.alias['react-native-fs'] = false;
-
-    // Sunucu tarafında bu modülü yok say
-    if (isServer) {
-        if (Array.isArray(config.externals)) {
-            config.externals.push('react-native-fs');
-        } else {
-            config.externals = ['react-native-fs', config.externals];
-        }
-    }
-    
-    return config;
-  },
 };
 
 export default nextConfig;
