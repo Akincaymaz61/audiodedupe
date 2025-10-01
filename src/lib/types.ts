@@ -3,6 +3,7 @@ export type AppFile = {
   parentHandle: FileSystemDirectoryHandle;
   name: string;
   path: string;
+  basePath?: string;
 };
 
 export type DuplicateGroup = {
@@ -15,3 +16,5 @@ export type DuplicateGroupWithSelection = DuplicateGroup & {
   id: string;
   selection: Set<string>;
 };
+
+    

@@ -71,20 +71,33 @@ export default function AudioDedupe() {
   };
 
 
-  const processFiles = useCallback((selectedFiles: FileList) => {
+  const processFiles = useCallback((selectedFiles: FileList, isRecursive: boolean) => {
     setError(null);
     setLoadingMessage('Ses dosyaları taranıyor...');
     setViewState('analyzing');
 
     startTransition(() => {
+        let basePath = '';
+        if (isRecursive && selectedFiles.length > 0 && selectedFiles[0].webkitRelativePath) {
+            const firstPath = selectedFiles[0].webkitRelativePath;
+            basePath = firstPath.split('/')[0];
+        }
+
         const newFiles: AppFile[] = Array.from(selectedFiles)
           .filter(file => AUDIO_EXTENSIONS.test(file.name) && (file.webkitRelativePath || file.name))
-          .map(file => ({
-              handle: { name: file.name, kind: 'file' } as unknown as FileSystemFileHandle,
-              parentHandle: { name: '', kind: 'directory' } as unknown as FileSystemDirectoryHandle,
-              name: file.name,
-              path: file.webkitRelativePath || file.name,
-          }));
+          .map(file => {
+              let relativePath = file.webkitRelativePath || file.name;
+              // For recursive selections, we want to store paths relative to the *inside* of the selected folder.
+              // But for the UI, we'll keep the top-level selected folder. So we just map it.
+              return {
+                  handle: { name: file.name, kind: 'file' } as unknown as FileSystemFileHandle,
+                  parentHandle: { name: '', kind: 'directory' } as unknown as FileSystemDirectoryHandle,
+                  name: file.name,
+                  path: relativePath,
+                  // We add a basePath property to know which root folder it belongs to.
+                  basePath: relativePath.split('/')[0]
+              }
+          });
 
         const uniqueNewFiles = newFiles.filter(nf => !files.some(f => f.path === nf.path));
 
@@ -105,10 +118,10 @@ export default function AudioDedupe() {
     });
   }, [files, toast]);
 
-  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>, isRecursive: boolean) => {
     const selectedFiles = event.target.files;
     if (selectedFiles && selectedFiles.length > 0) {
-        processFiles(selectedFiles);
+        processFiles(selectedFiles, isRecursive);
     }
     // Reset file input to allow selecting the same folder again
     event.target.value = '';
@@ -196,44 +209,64 @@ export default function AudioDedupe() {
   }
   
   const selectedFolders = useMemo(() => {
-      if (files.length === 0) return [];
+    if (files.length === 0) return [];
+    const folderSet = new Set<string>();
 
-      const folderSet = new Set<string>();
-      files.forEach(file => {
-          const parts = file.path.split('/');
-          if (parts.length > 1) {
-              // Add all parent directories
-              let currentPath = '';
-              for (let i = 0; i < parts.length - 1; i++) {
-                  currentPath = currentPath ? `${currentPath}/${parts[i]}` : parts[i];
-                  folderSet.add(currentPath);
-              }
-          } else {
-              folderSet.add('/');
-          }
-      });
-      return Array.from(folderSet).sort();
+    files.forEach(file => {
+        const parts = file.path.split('/');
+        // If path is like 'Music/Artist/Song.mp3', parts.length - 1 is 2. We want to add 'Music/Artist'.
+        if (parts.length > 1) {
+            let currentPath = '';
+            // We iterate up to the second to last part to get all parent dirs
+            for (let i = 0; i < parts.length - 1; i++) {
+                currentPath = currentPath ? `${currentPath}/${parts[i]}` : parts[i];
+                folderSet.add(currentPath);
+            }
+        }
+        // If file is at root of a selection, we add its basePath.
+        else if (file.basePath) {
+            folderSet.add(file.basePath);
+        }
+    });
+
+    const allFolders = Array.from(folderSet).sort();
+    
+    // Determine the root folders chosen by the user
+    const rootFolders = new Set<string>();
+    files.forEach(f => {
+        if(f.basePath) rootFolders.add(f.basePath);
+    });
+
+    // If a folder is a root folder that was selected recursively, we don't show it.
+    // We only show its subfolders.
+    return allFolders.filter(folder => {
+        const isRoot = rootFolders.has(folder);
+        const wasRecursive = files.some(f => f.basePath === folder && f.path.split('/').length > 1);
+        return !(isRoot && wasRecursive);
+    });
+
   }, [files]);
 
-  const removeFolder = (folderPath: string) => {
-      const newFiles = files.filter(file => {
-          if (folderPath === '/') {
-              // Remove only root files
-              return file.path.includes('/');
+  const removeFolder = (folderPathToRemove: string) => {
+      setFiles(currentFiles => {
+          const newFiles = currentFiles.filter(file => {
+              // The path of the directory containing the file
+              const fileFolder = file.path.substring(0, file.path.lastIndexOf('/')) || file.basePath;
+              // Check if the file's folder path starts with the folder to remove.
+              // This handles nested directories correctly.
+              return !(fileFolder && (fileFolder === folderPathToRemove || fileFolder.startsWith(folderPathToRemove + '/')));
+          });
+
+          setDuplicateGroups([]);
+          if (newFiles.length === 0) {
+              setViewState('initial');
+          } else {
+              setViewState('files_selected');
           }
-          // Remove files in the folder and its subfolders
-          return !file.path.startsWith(folderPath + '/') && file.path !== folderPath;
+          
+          toast({ title: 'Klasör kaldırıldı', description: `${folderPathToRemove} klasörü ve içindekiler listeden çıkarıldı.` });
+          return newFiles;
       });
-
-      setFiles(newFiles);
-      setDuplicateGroups([]);
-      setViewState(newFiles.length > 0 ? 'files_selected' : 'initial');
-
-      const message = folderPath === '/'
-          ? 'Kök dizindeki dosyalar kaldırıldı.'
-          : `${folderPath} klasöründeki ve alt klasörlerindeki tüm dosyalar listeden çıkarıldı.`;
-
-      toast({ title: 'Klasör kaldırıldı', description: message });
   };
   
     const filteredDuplicateGroups = useMemo(() => {
@@ -437,7 +470,7 @@ export default function AudioDedupe() {
           type="file" 
           ref={folderInputRef} 
           style={{ display: 'none' }} 
-          onChange={handleFileSelect}
+          onChange={(e) => handleFileSelect(e, false)}
           webkitdirectory="true"
           mozdirectory="true"
         />
@@ -445,7 +478,7 @@ export default function AudioDedupe() {
           type="file" 
           ref={recursiveFolderInputRef} 
           style={{ display: 'none' }} 
-          onChange={handleFileSelect}
+          onChange={(e) => handleFileSelect(e, true)}
           webkitdirectory="true"
           mozdirectory="true"
           multiple
@@ -554,7 +587,7 @@ export default function AudioDedupe() {
                                 <div key={folder} className="group flex items-center justify-between p-2 rounded-md hover:bg-muted/50">
                                   <p className="text-sm truncate" title={folder}>
                                     <Folder className="inline-block w-4 h-4 mr-2 text-primary" />
-                                    {folder === '/' ? 'Kök Dizin' : folder}
+                                    {folder}
                                   </p>
                                   <Button
                                     variant="ghost"
@@ -619,3 +652,5 @@ export default function AudioDedupe() {
     </SidebarProvider>
   );
 }
+
+    
