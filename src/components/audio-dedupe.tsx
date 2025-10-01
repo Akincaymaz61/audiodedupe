@@ -31,7 +31,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast"
-import { FolderSearch, FileScan, Trash2, Loader2, Music2, Folder, AlertTriangle, Info, FolderPlus, Settings, ListMusic, FileX2, FolderX, Search, XCircle, FilterX, PlayCircle, PauseCircle, Download, FileJson, SortDesc, Timer, FileDigit, ArrowUpCircle } from 'lucide-react';
+import { FolderSearch, FileScan, Trash2, Loader2, Music2, Folder, AlertTriangle, Info, FolderPlus, Settings, ListMusic, FileX2, FolderX, Search, XCircle, FilterX, PlayCircle, PauseCircle, Download, FileJson, SortDesc, Timer, FileDigit, ArrowUpCircle, CheckCheck, X } from 'lucide-react';
 import type { AppFile, DuplicateGroup, DuplicateGroupWithSelection, FileWithMetadata } from '@/lib/types';
 import { Logo } from './logo';
 import { Badge } from './ui/badge';
@@ -117,6 +117,7 @@ export default function AudioDedupe() {
   const [analysisStats, setAnalysisStats] = useState<AnalysisStats>(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
   const mainContentRef = useRef<HTMLDivElement>(null);
+  const analysisCancellation = useRef(false);
 
 
   const { toast } = useToast();
@@ -195,6 +196,7 @@ export default function AudioDedupe() {
       return;
     }
     
+    analysisCancellation.current = false;
     setViewState('analyzing');
     setAnalysisProgress(0);
     setError(null);
@@ -215,9 +217,11 @@ export default function AudioDedupe() {
             });
         
         await Promise.all(filePromises);
+        if (analysisCancellation.current) return;
         setFileObjects(prev => new Map([...prev, ...newFileObjects]));
 
     } catch (e) {
+        if (analysisCancellation.current) return;
         const errorMessage = e instanceof Error ? e.message : 'Dosya okuma sırasında beklenmedik bir hata oluştu.';
         setError(`Dosyalara erişirken bir hata oluştu: ${errorMessage}. Lütfen klasör izinlerini kontrol edin.`);
         toast({ title: "Dosya Erişim Hatası", description: errorMessage, variant: "destructive" });
@@ -230,6 +234,7 @@ export default function AudioDedupe() {
     let completed = 0;
     metadataPromises.forEach(p => {
         p.then(() => {
+            if (analysisCancellation.current) return;
             completed++;
             const progress = (completed / metadataPromises.length) * 50; 
             setAnalysisProgress(progress);
@@ -238,6 +243,7 @@ export default function AudioDedupe() {
 
     try {
         const allMetadata = await Promise.all(metadataPromises);
+        if (analysisCancellation.current) return;
         
         const newMetadataMap = new Map<string, FileWithMetadata>();
         allMetadata.forEach(meta => newMetadataMap.set(meta.path, meta));
@@ -248,10 +254,12 @@ export default function AudioDedupe() {
 
         const allFilePaths = files.map(f => f.path);
         
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise(resolve => setTimeout(resolve, 100)); // UI update için
+        if (analysisCancellation.current) return;
         setAnalysisProgress(75);
 
         const groups = findDuplicateGroupsLocally(allFilePaths, similarityThreshold);
+        if (analysisCancellation.current) return;
         
         const groupsWithSelection = groups
             .map((group, index) => ({
@@ -287,12 +295,21 @@ export default function AudioDedupe() {
         setLoadingMessage('');
 
     } catch (e) {
+        if (analysisCancellation.current) return;
         const errorMessage = e instanceof Error ? e.message : 'Analiz sırasında beklenmedik bir hata oluştu.';
         setError(errorMessage);
         toast({ title: "Analiz Hatası", description: errorMessage, variant: "destructive" });
         setViewState('results');
         setLoadingMessage('');
     }
+  };
+
+  const cancelAnalysis = () => {
+    analysisCancellation.current = true;
+    setViewState('files_selected');
+    setLoadingMessage('');
+    setAnalysisProgress(0);
+    toast({ title: "Analiz İptal Edildi", description: "Kullanıcı tarafından analiz işlemi durduruldu." });
   };
 
   useEffect(() => {
@@ -326,6 +343,17 @@ export default function AudioDedupe() {
       }
       return group;
     }));
+  };
+
+  const handleSelectAll = (select: boolean) => {
+    setDuplicateGroups(prev => prev.map(group => {
+        const newSelection = select ? new Set(group.files.slice(1)) : new Set<string>();
+        return { ...group, selection: newSelection };
+    }));
+    toast({
+        title: select ? "Tümü Seçildi" : "Tüm Seçimler Kaldırıldı",
+        description: select ? "Tüm gruplardaki yinelenen dosyalar (ilk dosya hariç) seçildi." : "Tüm gruplardaki seçimler temizlendi."
+    });
   };
 
   const handleDeleteSelected = async (groupsToDeleteFrom: DuplicateGroupWithSelection[]) => {
@@ -505,6 +533,15 @@ export default function AudioDedupe() {
 
   const totalSelectedCount = useMemo(() => {
     return filteredDuplicateGroups.reduce((acc, group) => acc + group.selection.size, 0);
+  }, [filteredDuplicateGroups]);
+
+  const areAllSelected = useMemo(() => {
+      if (filteredDuplicateGroups.length === 0) return false;
+      return filteredDuplicateGroups.every(group => {
+          const selectableFiles = group.files.slice(1);
+          if (selectableFiles.length === 0) return true; // Gruplarda seçilecek dosya yoksa, "seçilmiş" kabul edilir.
+          return selectableFiles.every(file => group.selection.has(file));
+      });
   }, [filteredDuplicateGroups]);
 
     const handlePlayPause = async (filePath: string) => {
@@ -759,8 +796,8 @@ export default function AudioDedupe() {
                 </Card>
              )}
             <Card>
-                <CardHeader className="flex flex-row items-center justify-between">
-                    <div className='flex items-center gap-2'>
+                <CardHeader className="flex flex-row items-center justify-between flex-wrap gap-2">
+                    <div className='flex items-center gap-2 flex-wrap'>
                        <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button variant="outline">
@@ -776,6 +813,10 @@ export default function AudioDedupe() {
                             ))}
                           </DropdownMenuContent>
                         </DropdownMenu>
+                        <Button variant="outline" onClick={() => handleSelectAll(!areAllSelected)}>
+                            {areAllSelected ? <X className="mr-2"/> : <CheckCheck className="mr-2"/>}
+                            {areAllSelected ? 'Tüm Seçimi Bırak' : 'Tümünü Seç'}
+                        </Button>
                     </div>
                      <AlertDialog>
                         <AlertDialogTrigger asChild>
@@ -921,6 +962,10 @@ export default function AudioDedupe() {
                     <h2 className="text-2xl font-bold mb-2">Analiz Ediliyor</h2>
                     <p className="text-muted-foreground mb-4">{loadingMessage}</p>
                     <Progress value={analysisProgress} className="w-full" />
+                    <Button variant="outline" onClick={cancelAnalysis} className="mt-6">
+                        <XCircle className="mr-2"/>
+                        İptal Et
+                    </Button>
                   </div>
                 </CardContent>
             </Card>
