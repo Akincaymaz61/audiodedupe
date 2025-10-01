@@ -44,6 +44,7 @@ import { Progress } from './ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { findDuplicateGroupsLocally } from '@/lib/local-analyzer';
 import jsmediatags from 'jsmediatags';
+import { cn } from '@/lib/utils';
 
 
 const AUDIO_EXTENSIONS = /\.(mp3|wav|flac|m4a|ogg|aac|aiff)$/i;
@@ -75,6 +76,8 @@ export default function AudioDedupe() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [selectionStrategy, setSelectionStrategy] = useState<SelectionStrategy>('none');
   const [visibleResultsCount, setVisibleResultsCount] = useState(RESULTS_PAGE_SIZE);
+  const [activeFolderCard, setActiveFolderCard] = useState<string | null>(null);
+
 
   const { toast } = useToast();
 
@@ -315,27 +318,32 @@ export default function AudioDedupe() {
     toast({title: "Liste Temizlendi", description: "Tüm dosyalar listeden kaldırıldı."})
   }
 
-  const selectedFolders = useMemo(() => {
-    const folderSet = new Set<string>();
+  const selectedFoldersWithCounts = useMemo(() => {
+    const folderMap = new Map<string, number>();
     files.forEach(file => {
-      const pathParts = file.path.split('/');
-      if (pathParts.length > 1) {
-        folderSet.add(pathParts.slice(0, -1).join('/'));
-      }
+      const path = file.basePath || 'Bilinmeyen Klasör';
+      folderMap.set(path, (folderMap.get(path) || 0) + 1);
     });
-    return Array.from(folderSet).sort();
+    return Array.from(folderMap.entries())
+      .map(([path, count]) => ({ path, count }))
+      .sort((a, b) => a.path.localeCompare(b.path));
   }, [files]);
 
-  const removeFolder = (folderPathToRemove: string) => {
-      const newFiles = files.filter(file => !file.path.startsWith(folderPathToRemove + '/'));
+  const selectedFolders = useMemo(() => {
+      return selectedFoldersWithCounts.map(f => f.path);
+  }, [selectedFoldersWithCounts]);
+
+
+  const removeFolder = useCallback((folderPathToRemove: string) => {
+      const newFiles = files.filter(file => file.basePath !== folderPathToRemove);
       const newFileObjects = new Map(fileObjects);
       const newFilesWithMetadata = new Map(filesWithMetadata);
 
-      for (const path of fileObjects.keys()) {
-          if (path.startsWith(folderPathToRemove + '/')) {
-              newFileObjects.delete(path);
-              newFilesWithMetadata.delete(path);
-          }
+      for (const file of files) {
+        if (file.basePath === folderPathToRemove) {
+          newFileObjects.delete(file.path);
+          newFilesWithMetadata.delete(file.path);
+        }
       }
 
       setFiles(newFiles);
@@ -350,7 +358,7 @@ export default function AudioDedupe() {
       }
       
       toast({ title: 'Klasör kaldırıldı', description: `${folderPathToRemove} klasörü ve içindekiler listeden çıkarıldı.` });
-  };
+  }, [files, fileObjects, filesWithMetadata, toast]);
   
     const filteredDuplicateGroups = useMemo(() => {
     let filtered = duplicateGroups.filter(group => group.similarityScore >= resultsSimilarityFilter);
@@ -433,6 +441,21 @@ export default function AudioDedupe() {
         }
     }, [currentlyPlaying]);
 
+    useEffect(() => {
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if ((event.key === 'Delete' || event.key === 'Backspace') && activeFolderCard) {
+                event.preventDefault();
+                removeFolder(activeFolderCard);
+                setActiveFolderCard(null);
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [activeFolderCard, removeFolder]);
+
     const applySelectionStrategy = () => {
         if (selectionStrategy === 'none') return;
     
@@ -495,6 +518,57 @@ export default function AudioDedupe() {
         </CardContent>
       </Card>
   );
+
+  const renderFileSelectionView = () => (
+    <div className="space-y-4">
+        <Card>
+            <CardHeader>
+                <CardTitle>Analize Hazır Klasörler</CardTitle>
+                <CardDescription>
+                    Aşağıda analize dahil edilecek klasörler listelenmiştir.
+                    Toplam {files.length} dosya bulundu. Analizi başlatmaya hazırsınız.
+                </CardDescription>
+            </CardHeader>
+        </Card>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {selectedFoldersWithCounts.map(({ path, count }) => (
+                <Card 
+                    key={path}
+                    className={cn(
+                        "group relative cursor-pointer transition-all hover:shadow-lg hover:-translate-y-1",
+                        activeFolderCard === path && "ring-2 ring-primary shadow-lg -translate-y-1"
+                    )}
+                    onClick={() => setActiveFolderCard(path)}
+                    tabIndex={0}
+                    onBlur={() => setActiveFolderCard(null)}
+                >
+                    <CardHeader className="flex flex-row items-start gap-4">
+                       <Folder className="h-10 w-10 text-primary flex-shrink-0 mt-1" />
+                       <div className="flex-1 overflow-hidden">
+                           <CardTitle className="text-lg truncate" title={path}>{path.split('/').pop() || path}</CardTitle>
+                           <CardDescription className="truncate text-xs" title={path}>{path}</CardDescription>
+                       </div>
+                    </CardHeader>
+                    <CardContent>
+                       <Badge variant="secondary">{count} dosya</Badge>
+                    </CardContent>
+                    <Button 
+                      variant="ghost"
+                      size="icon"
+                      className="absolute top-2 right-2 h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={(e) => {
+                          e.stopPropagation();
+                          removeFolder(path);
+                      }}
+                    >
+                      <XCircle className="h-5 w-5 text-muted-foreground hover:text-destructive" />
+                    </Button>
+                </Card>
+            ))}
+        </div>
+    </div>
+  );
+
 
   const renderResultsView = () => {
     if (filteredDuplicateGroups.length === 0) {
@@ -641,10 +715,12 @@ export default function AudioDedupe() {
        );
     }
     
-    if (viewState === 'results' || (viewState === 'files_selected' && files.length > 0)) {
-        if (duplicateGroups.length > 0 || viewState === 'results') {
-            return renderResultsView();
-        }
+    if (viewState === 'results' ) {
+      return renderResultsView();
+    }
+    
+    if (viewState === 'files_selected' && files.length > 0) {
+      return renderFileSelectionView();
     }
     
     return renderInitialView();
