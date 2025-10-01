@@ -285,28 +285,30 @@ export default function AudioDedupe() {
               return (
               <Card key={group.id} className="overflow-hidden">
                 <AccordionItem value={group.id} className="border-b-0">
-                  <AccordionTrigger className="p-4 hover:no-underline hover:bg-muted/50 text-left">
-                    <div className="flex-1">
-                      <div className='flex items-center justify-between'>
-                         <div className="flex items-center gap-3">
-                             <Checkbox
-                                checked={isGroupFullySelected}
-                                onCheckedChange={(checked) => handleToggleGroupSelection(group.id, !!checked)}
-                                onClick={(e) => e.stopPropagation()} // Prevent accordion from toggling
-                                aria-label="Tüm grubu seç/bırak"
-                             />
-                             <p className="font-semibold text-lg">{group.files.length} Benzer Dosya Grubu</p>
-                         </div>
-                         <Badge variant={group.similarityScore > 0.9 ? 'default' : 'secondary'}>
-                            Benzerlik: {Math.round(group.similarityScore * 100)}%
-                         </Badge>
-                      </div>
-                      <div className="flex items-center text-sm text-muted-foreground mt-1 gap-2 pl-9">
-                        <Info className="w-4 h-4 flex-shrink-0"/>
-                        <span className="font-mono text-xs truncate" title={group.reason}>{group.reason}</span>
-                      </div>
-                    </div>
-                  </AccordionTrigger>
+                  <div className="flex items-center p-4 pr-1 hover:bg-muted/50">
+                    <Checkbox
+                        checked={isGroupFullySelected}
+                        onCheckedChange={(checked) => handleToggleGroupSelection(group.id, !!checked)}
+                        aria-label="Tüm grubu seç/bırak"
+                        className="mr-3"
+                    />
+                    <AccordionTrigger className="flex-1 p-0 hover:no-underline text-left">
+                        <div className="flex-1">
+                          <div className='flex items-center justify-between'>
+                             <div className="flex items-center gap-3">
+                                 <p className="font-semibold text-lg">{group.files.length} Benzer Dosya Grubu</p>
+                             </div>
+                             <Badge variant={group.similarityScore > 0.9 ? 'default' : 'secondary'}>
+                                Benzerlik: {Math.round(group.similarityScore * 100)}%
+                             </Badge>
+                          </div>
+                          <div className="flex items-center text-sm text-muted-foreground mt-1 gap-2">
+                            <Info className="w-4 h-4 flex-shrink-0"/>
+                            <span className="font-mono text-xs truncate" title={group.reason}>{group.reason}</span>
+                          </div>
+                        </div>
+                    </AccordionTrigger>
+                  </div>
                   <AccordionContent className="p-0">
                     <div className="border-t">
                       <ul className="p-4 space-y-3">
