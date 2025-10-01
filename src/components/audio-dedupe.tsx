@@ -42,6 +42,7 @@ import { ScrollArea } from './ui/scroll-area';
 import { Input } from './ui/input';
 import { Progress } from './ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { findDuplicateGroupsLocally } from '@/lib/local-analyzer';
 import jsmediatags from 'jsmediatags';
 
 
@@ -50,165 +51,6 @@ const RESULTS_PAGE_SIZE = 50;
 
 type ViewState = 'initial' | 'files_selected' | 'analyzing' | 'results';
 type SelectionStrategy = 'none' | 'keep_highest_quality' | 'keep_lowest_quality' | 'keep_shortest_name';
-
-
-// Levenshtein mesafesi hesaplama fonksiyonu
-function calculateLevenshtein(a: string, b: string): number {
-    const an = a ? a.length : 0;
-    const bn = b ? b.length : 0;
-    if (an === 0) return bn;
-    if (bn === 0) return an;
-    const matrix = new Array<number[]>(bn + 1);
-    for (let i = 0; i <= bn; ++i) {
-        let row = matrix[i] = new Array<number>(an + 1);
-        row[0] = i;
-    }
-    const firstRow = matrix[0];
-    for (let j = 1; j <= an; ++j) {
-        firstRow[j] = j;
-    }
-    for (let i = 1; i <= bn; ++i) {
-        for (let j = 1; j <= an; ++j) {
-            if (b.charAt(i - 1) === a.charAt(j - 1)) {
-                matrix[i][j] = matrix[i - 1][j - 1];
-            } else {
-                matrix[i][j] = Math.min(
-                    matrix[i - 1][j - 1] + 1, // substitution
-                    matrix[i][j - 1] + 1,     // insertion
-                    matrix[i - 1][j] + 1      // deletion
-                );
-            }
-        }
-    }
-    return matrix[bn][an];
-}
-
-// İki string arasındaki benzerlik oranını hesaplar
-function calculateSimilarity(s1: string, s2: string): number {
-    if (!s1 || !s2) return 0;
-    const longer = s1.length > s2.length ? s1 : s2;
-    const shorter = s1.length > s2.length ? s2 : s1;
-    if (longer.length === 0) {
-        return 1.0;
-    }
-    const distance = calculateLevenshtein(longer, shorter);
-    return (longer.length - distance) / longer.length;
-}
-
-const VERSION_MARKERS = [
-    'remix', 'live', 'acoustic', 'instrumental', 'radio edit', 
-    'reprise', 'bonus', 'demo', 'alternate version', 'unplugged',
-    'rehearsal', 'soundcheck', 'extended', 'club mix', 'original mix',
-    'edit', 'version', 'dub'
-];
-
-// Dosya adını normalize eder
-function normalizeFileName(filePath: string): string {
-    let name = (filePath.split('/').pop() || '').toLowerCase();
-    
-    // Dosya uzantısını kaldır
-    name = name.substring(0, name.lastIndexOf('.')) || name;
-    
-    // Özel son ekleri temizle
-    name = name.replace(/_pn$/, '').trim();
-
-    // Sanatçı ve şarkı adını ayırmaya çalış
-    const parts = name.split(' - ');
-    let artistAndTitle: string;
-
-    // "10A - 125 - Artist - Title" gibi kalıpları işle
-    if (parts.length >= 3) {
-        const isCamelot = /^\d{1,2}[ab]$/.test(parts[0].trim());
-        const isBpm = /^\d{2,3}$/.test(parts[1].trim());
-
-        if (isCamelot && isBpm && parts.length >= 4) {
-            artistAndTitle = parts.slice(2).join(' ');
-        } else if (isCamelot) {
-            artistAndTitle = parts.slice(1).join(' ');
-        } else {
-            artistAndTitle = parts.join(' ');
-        }
-    } else {
-        artistAndTitle = name;
-    }
-
-    // Parantez içindeki versiyon bilgilerini temizle
-    let finalName = artistAndTitle.replace(/[\[(](.*?)[\])]/g, (match, content) => {
-        const potentialVersion = content.toLowerCase().trim();
-        if (VERSION_MARKERS.some(marker => potentialVersion.includes(marker))) {
-            return ''; // Versiyon bilgisi içeriyorsa kaldır
-        }
-        return match; // İçermiyorsa koru
-    }).trim();
-    
-    // Kalan versiyon belirteçlerini temizle
-    for (const marker of VERSION_MARKERS) {
-        const regex = new RegExp(`\\b${marker}\\b`, 'gi');
-        finalName = finalName.replace(regex, '');
-    }
-
-    // Özel karakterleri ve fazla boşlukları temizle
-    finalName = finalName.replace(/[^\w\s\d]/gi, ' ').replace(/\s+/g, ' ').trim();
-    // Sondaki sayıları temizle (genellikle parça numarası)
-    finalName = finalName.replace(/-\s*\d{1,3}\s*$/, '').trim();
-    finalName = finalName.replace(/\s+\d{1,3}$/, '').trim();
-
-    return finalName;
-}
-
-function findDuplicateGroupsLocally(filePaths: string[], similarityThreshold: number): DuplicateGroup[] {
-  const filesWithNormalizedNames = filePaths.map(path => ({
-      path,
-      normalized: normalizeFileName(path)
-  }));
-  
-  const groups: Map<string, string[]> = new Map();
-  const checkedPaths = new Set<string>();
-
-  for (let i = 0; i < filesWithNormalizedNames.length; i++) {
-      const fileA = filesWithNormalizedNames[i];
-      
-      if (checkedPaths.has(fileA.path) || !fileA.normalized) {
-          continue;
-      }
-
-      const newGroup = [fileA.path];
-      
-      for (let j = i + 1; j < filesWithNormalizedNames.length; j++) {
-          const fileB = filesWithNormalizedNames[j];
-          if (checkedPaths.has(fileB.path) || !fileB.normalized) {
-              continue;
-          }
-          
-          const similarity = calculateSimilarity(fileA.normalized, fileB.normalized);
-
-          if (similarity >= similarityThreshold) {
-              newGroup.push(fileB.path);
-              checkedPaths.add(fileB.path);
-          }
-      }
-
-      if (newGroup.length > 1) {
-          checkedPaths.add(fileA.path);
-          groups.set(fileA.path, newGroup);
-      }
-  }
-
-  return Array.from(groups.values()).map((files) => {
-      const firstFileNormalized = normalizeFileName(files[0]);
-      let score = 0;
-      if (files.length > 1) {
-          const secondFileNormalized = normalizeFileName(files[1]);
-          score = calculateSimilarity(firstFileNormalized, secondFileNormalized);
-      }
-
-      return {
-          files: files.sort(),
-          reason: `Dosya adları "${firstFileNormalized}" adına benziyor.`,
-          similarityScore: score,
-      };
-  }).filter(group => group.files.length > 1);
-}
 
 
 export default function AudioDedupe() {
@@ -350,7 +192,6 @@ export default function AudioDedupe() {
     setAnalysisProgress(0);
     setError(null);
     
-    // Meta verileri okuma işlemi (tarayıcıda kalır)
     setLoadingMessage('Meta veriler okunuyor...');
     
     const filesToRead = Array.from(fileObjects.values()).filter(file => {
@@ -369,19 +210,18 @@ export default function AudioDedupe() {
         });
     });
 
-    const allMetadata = await Promise.all(metadataPromises);
-    
-    const newMetadataMap = new Map<string, FileWithMetadata>();
-    allMetadata.forEach(meta => newMetadataMap.set(meta.path, meta));
-    setFilesWithMetadata(prev => new Map([...prev, ...newMetadataMap]));
-
-    setAnalysisProgress(50);
-    setLoadingMessage('Benzer dosyalar analiz ediliyor...');
-
     try {
+        const allMetadata = await Promise.all(metadataPromises);
+        
+        const newMetadataMap = new Map<string, FileWithMetadata>();
+        allMetadata.forEach(meta => newMetadataMap.set(meta.path, meta));
+        setFilesWithMetadata(prev => new Map([...prev, ...newMetadataMap]));
+
+        setAnalysisProgress(50);
+        setLoadingMessage('Benzer dosyalar analiz ediliyor...');
+
         const allFilePaths = files.map(f => f.path);
         
-        // Simulating async work for analysis progress
         await new Promise(resolve => setTimeout(resolve, 100));
         setAnalysisProgress(75);
 
@@ -391,7 +231,7 @@ export default function AudioDedupe() {
             .map((group, index) => ({
                 ...group,
                 id: `group-${index}`,
-                selection: new Set(group.files.slice(1)), // İlk dosyayı tut, diğerlerini seç
+                selection: new Set(group.files.slice(1)), 
             }))
             .sort((a, b) => b.similarityScore - a.similarityScore);
         
@@ -423,7 +263,6 @@ export default function AudioDedupe() {
   };
 
   useEffect(() => {
-    // Component unmount olduğunda audio URL'sini temizle
     return () => {
         if (currentlyPlaying) {
           URL.revokeObjectURL(currentlyPlaying.url);
@@ -449,7 +288,6 @@ export default function AudioDedupe() {
     const handleToggleGroupSelection = (groupId: string, selectAll: boolean) => {
     setDuplicateGroups(prev => prev.map(group => {
       if (group.id === groupId) {
-        // En az bir dosya her zaman tutulmalıdır, bu yüzden ilk dosyayı hariç tut
         const newSelection = selectAll ? new Set(group.files.slice(1)) : new Set<string>();
         return { ...group, selection: newSelection };
       }
@@ -458,15 +296,12 @@ export default function AudioDedupe() {
   };
 
   const handleDeleteSelected = async (groupsToDeleteFrom: DuplicateGroupWithSelection[]) => {
-    // UYARI: Bu yöntem dosya sistemine erişim API'si (showDirectoryPicker) olmadan çalışmaz.
-    // input[type=file] ile seçilen dosyalar üzerinde silme işlemi yapılamaz.
-    // Bu fonksiyon şimdilik sadece bir uyarı gösterir.
     toast({
         title: "Silme işlemi uygulanamadı",
         description: "Bu dosya seçim yöntemiyle (klasör ekle) dosya silme desteklenmemektedir.",
         variant: "destructive",
     });
-    console.warn("File deletion was attempted, but it is not implemented for the input[type=file] method. The original implementation used showDirectoryPicker which has write access.");
+    console.warn("File deletion was attempted, but it is not implemented for the input[type=file] method.");
   };
   
   const clearAllFiles = () => {
@@ -485,7 +320,6 @@ export default function AudioDedupe() {
     files.forEach(file => {
       const pathParts = file.path.split('/');
       if (pathParts.length > 1) {
-        // Dosyanın bulunduğu klasör yolunu al
         folderSet.add(pathParts.slice(0, -1).join('/'));
       }
     });
@@ -558,7 +392,6 @@ export default function AudioDedupe() {
                 }
             }
         } else {
-            // Önceki sesin URL'sini temizle
             if (currentlyPlaying) {
                 URL.revokeObjectURL(currentlyPlaying.url);
             }
@@ -614,25 +447,20 @@ export default function AudioDedupe() {
     
             switch (selectionStrategy) {
                 case 'keep_highest_quality':
-                    // Önce bitrate'e, sonra boyuta göre sırala
                     filesWithMetaData.sort((a, b) => b.bitrate - a.bitrate || b.size - a.size);
                     break;
                 case 'keep_lowest_quality':
-                     // Önce bitrate'e, sonra boyuta göre sırala
                      filesWithMetaData.sort((a, b) => a.bitrate - b.bitrate || a.size - b.size);
                     break;
                 case 'keep_shortest_name':
                     filesWithMetaData.sort((a, b) => a.name.length - b.name.length);
                     break;
                 default:
-                    // Bilinmeyen strateji, grubu değiştirme
                     return group;
             }
             
-            // Sıralamadan sonra ilk dosya tutulacak olan
             fileToKeep = filesWithMetaData.length > 0 ? filesWithMetaData[0].path : '';
             
-            // Tutulacak dosya dışındaki tüm dosyaları seç
             const newSelection = new Set(group.files.filter(path => path !== fileToKeep));
             
             return { ...group, selection: newSelection };
