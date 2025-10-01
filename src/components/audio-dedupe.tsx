@@ -155,6 +155,7 @@ export default function AudioDedupe() {
     if (selectedFiles && selectedFiles.length > 0) {
         processFiles(selectedFiles, isRecursive);
     }
+    // Input'u temizle, böylece aynı klasör tekrar seçilebilir
     event.target.value = '';
   };
   
@@ -162,7 +163,7 @@ export default function AudioDedupe() {
       return new Promise((resolve) => {
         jsmediatags.read(file, {
             onSuccess: (tag) => {
-                const v2 = (tag.tags as any).v2;
+                const v2 = (tag.tags as any)?.v2;
                 resolve({
                     path: (file as any).webkitRelativePath || file.name,
                     size: file.size,
@@ -190,6 +191,7 @@ export default function AudioDedupe() {
     setAnalysisProgress(0);
     setError(null);
     
+    // Meta verileri okuma işlemi (tarayıcıda kalır)
     setLoadingMessage('Meta veriler okunuyor...');
     const metadataMap = new Map<string, FileWithMetadata>();
     const filesToRead = Array.from(fileObjects.values());
@@ -202,13 +204,14 @@ export default function AudioDedupe() {
         } else {
             metadataMap.set(path, filesWithMetadata.get(path)!);
         }
-        setAnalysisProgress(50 * (i / filesToRead.length)); // Metadata reading is first 50%
+        setAnalysisProgress(50 * ((i + 1) / filesToRead.length)); // Meta okuma ilk %50'yi kaplar
     }
-    setFilesWithMetadata(metadataMap);
+    setFilesWithMetadata(prev => new Map([...prev, ...metadataMap]));
 
-    setLoadingMessage('Benzer dosyalar sunucuda analiz ediliyor...');
+    setLoadingMessage('Benzer dosya adları sunucuda analiz ediliyor...');
     try {
         const allFilePaths = files.map(f => f.path);
+        // Sunucuya sadece dosya yollarının listesini gönder
         const response = await fetch('/api/analyze', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -218,7 +221,7 @@ export default function AudioDedupe() {
             }),
         });
 
-        setAnalysisProgress(75); // Moved to analysis stage
+        setAnalysisProgress(75); // Sunucu analizi aşaması
 
         if (!response.ok) {
             const errorData = await response.json();
@@ -226,13 +229,12 @@ export default function AudioDedupe() {
         }
 
         const groups: DuplicateGroup[] = await response.json();
-        let groupIndex = 0;
-
+        
         const groupsWithSelection = groups
-            .map((group) => ({
+            .map((group, index) => ({
                 ...group,
-                id: `group-${groupIndex++}`,
-                selection: new Set(group.files.slice(1)),
+                id: `group-${index}`,
+                selection: new Set(group.files.slice(1)), // İlk dosyayı tut, diğerlerini seç
             }))
             .sort((a, b) => b.similarityScore - a.similarityScore);
         
@@ -241,12 +243,12 @@ export default function AudioDedupe() {
         setAnalysisProgress(100);
         
         const initiallyOpen = groupsWithSelection
-            .filter(g => g.files.length === 2)
+            .filter(g => g.files.length === 2) // Sadece 2 dosyalık grupları başlangıçta aç
             .map(g => g.id);
         setOpenAccordionItems(initiallyOpen);
         
         if (groupsWithSelection.length === 0) {
-            toast({ title: "Kopya bulunamadı", description: "Analiz tamamlandı ancak yinelenen grup tespit edilmedi." });
+            toast({ title: "Kopya bulunamadı", description: "Analiz tamamlandı ancak yinelenen dosya grubu tespit edilmedi." });
         } else {
             toast({ title: "Analiz Tamamlandı", description: `${groupsWithSelection.length} yinelenen grup bulundu.` });
         }
@@ -258,12 +260,13 @@ export default function AudioDedupe() {
         const errorMessage = e instanceof Error ? e.message : 'Analiz sırasında beklenmedik bir hata oluştu.';
         setError(errorMessage);
         toast({ title: "Analiz Hatası", description: errorMessage, variant: "destructive" });
-        setViewState('results');
+        setViewState('results'); // Sonuçları göstermek için state'i ayarla, hata olsa bile
         setLoadingMessage('');
     }
   };
 
   useEffect(() => {
+    // Component unmount olduğunda audio URL'sini temizle
     return () => {
         if (currentlyPlaying) {
           URL.revokeObjectURL(currentlyPlaying.url);
@@ -289,6 +292,7 @@ export default function AudioDedupe() {
     const handleToggleGroupSelection = (groupId: string, selectAll: boolean) => {
     setDuplicateGroups(prev => prev.map(group => {
       if (group.id === groupId) {
+        // En az bir dosya her zaman tutulmalıdır, bu yüzden ilk dosyayı hariç tut
         const newSelection = selectAll ? new Set(group.files.slice(1)) : new Set<string>();
         return { ...group, selection: newSelection };
       }
@@ -297,9 +301,12 @@ export default function AudioDedupe() {
   };
 
   const handleDeleteSelected = async (groupsToDeleteFrom: DuplicateGroupWithSelection[]) => {
+    // UYARI: Bu yöntem dosya sistemine erişim API'si (showDirectoryPicker) olmadan çalışmaz.
+    // input[type=file] ile seçilen dosyalar üzerinde silme işlemi yapılamaz.
+    // Bu fonksiyon şimdilik sadece bir uyarı gösterir.
     toast({
         title: "Silme işlemi uygulanamadı",
-        description: "Bu klasör seçim yöntemiyle dosya silme desteklenmiyor.",
+        description: "Bu dosya seçim yöntemiyle (klasör ekle) dosya silme desteklenmemektedir.",
         variant: "destructive",
     });
     console.warn("File deletion was attempted, but it is not implemented for the input[type=file] method. The original implementation used showDirectoryPicker which has write access.");
@@ -321,11 +328,8 @@ export default function AudioDedupe() {
     files.forEach(file => {
       const pathParts = file.path.split('/');
       if (pathParts.length > 1) {
-        let currentPath = '';
-        for (let i = 0; i < pathParts.length - 1; i++) {
-          currentPath = currentPath ? `${currentPath}/${pathParts[i]}` : pathParts[i];
-          folderSet.add(currentPath);
-        }
+        // Dosyanın bulunduğu klasör yolunu al
+        folderSet.add(pathParts.slice(0, -1).join('/'));
       }
     });
     return Array.from(folderSet).sort();
@@ -361,9 +365,10 @@ export default function AudioDedupe() {
     let filtered = duplicateGroups.filter(group => group.similarityScore >= resultsSimilarityFilter);
 
     if (filterText) {
+      const lowercasedFilter = filterText.toLowerCase();
       filtered = filtered.filter(group =>
         group.files.some(file =>
-          file.toLowerCase().includes(filterText.toLowerCase())
+          file.toLowerCase().includes(lowercasedFilter)
         )
       );
     }
@@ -396,11 +401,12 @@ export default function AudioDedupe() {
                 }
             }
         } else {
+            // Önceki sesin URL'sini temizle
+            if (currentlyPlaying) {
+                URL.revokeObjectURL(currentlyPlaying.url);
+            }
             const file = fileObjects.get(filePath);
             if (file) {
-                if (currentlyPlaying) {
-                    URL.revokeObjectURL(currentlyPlaying.url);
-                }
                 const url = URL.createObjectURL(file);
                 setCurrentlyPlaying({ path: filePath, url });
             }
@@ -408,11 +414,14 @@ export default function AudioDedupe() {
     };
     
     useEffect(() => {
-        if (audioRef.current) {
-            const audio = audioRef.current;
+        const audio = audioRef.current;
+        if (audio) {
             const handlePlay = () => setIsPlaying(true);
             const handlePause = () => setIsPlaying(false);
-            const handleEnded = () => setCurrentlyPlaying(null);
+            const handleEnded = () => {
+              setIsPlaying(false);
+              setCurrentlyPlaying(null);
+            };
 
             audio.addEventListener('play', handlePlay);
             audio.addEventListener('pause', handlePause);
@@ -448,20 +457,25 @@ export default function AudioDedupe() {
     
             switch (selectionStrategy) {
                 case 'keep_highest_quality':
+                    // Önce bitrate'e, sonra boyuta göre sırala
                     filesWithMetaData.sort((a, b) => b.bitrate - a.bitrate || b.size - a.size);
                     break;
                 case 'keep_lowest_quality':
+                     // Önce bitrate'e, sonra boyuta göre sırala
                      filesWithMetaData.sort((a, b) => a.bitrate - b.bitrate || a.size - b.size);
                     break;
                 case 'keep_shortest_name':
                     filesWithMetaData.sort((a, b) => a.name.length - b.name.length);
                     break;
                 default:
+                    // Bilinmeyen strateji, grubu değiştirme
                     return group;
             }
             
+            // Sıralamadan sonra ilk dosya tutulacak olan
             fileToKeep = filesWithMetaData.length > 0 ? filesWithMetaData[0].path : '';
             
+            // Tutulacak dosya dışındaki tüm dosyaları seç
             const newSelection = new Set(group.files.filter(path => path !== fileToKeep));
             
             return { ...group, selection: newSelection };

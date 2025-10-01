@@ -56,12 +56,17 @@ const VERSION_MARKERS = [
 function normalizeFileName(filePath: string): string {
     let name = (filePath.split('/').pop() || '').toLowerCase();
     
+    // Dosya uzantısını kaldır
     name = name.substring(0, name.lastIndexOf('.')) || name;
+    
+    // Özel son ekleri temizle
     name = name.replace(/_pn$/, '').trim();
 
+    // Sanatçı ve şarkı adını ayırmaya çalış
     const parts = name.split(' - ');
     let artistAndTitle: string;
 
+    // "10A - 125 - Artist - Title" gibi kalıpları işle
     if (parts.length >= 3) {
         const isCamelot = /^\d{1,2}[ab]$/.test(parts[0].trim());
         const isBpm = /^\d{2,3}$/.test(parts[1].trim());
@@ -77,20 +82,24 @@ function normalizeFileName(filePath: string): string {
         artistAndTitle = name;
     }
 
+    // Parantez içindeki versiyon bilgilerini temizle
     let finalName = artistAndTitle.replace(/[\[(](.*?)[\])]/g, (match, content) => {
         const potentialVersion = content.toLowerCase().trim();
         if (VERSION_MARKERS.some(marker => potentialVersion.includes(marker))) {
-            return '';
+            return ''; // Versiyon bilgisi içeriyorsa kaldır
         }
-        return match;
+        return match; // İçermiyorsa koru
     }).trim();
     
+    // Kalan versiyon belirteçlerini temizle
     for (const marker of VERSION_MARKERS) {
         const regex = new RegExp(`\\b${marker}\\b`, 'gi');
         finalName = finalName.replace(regex, '');
     }
 
+    // Özel karakterleri ve fazla boşlukları temizle
     finalName = finalName.replace(/[^\w\s\d]/gi, ' ').replace(/\s+/g, ' ').trim();
+    // Sondaki sayıları temizle (genellikle parça numarası)
     finalName = finalName.replace(/-\s*\d{1,3}\s*$/, '').trim();
     finalName = finalName.replace(/\s+\d{1,3}$/, '').trim();
 
@@ -138,10 +147,12 @@ export async function POST(request: Request) {
 
         if (newGroup.length > 1) {
             checkedPaths.add(fileA.path);
+            // Anahtar olarak ilk dosyanın yolunu kullanarak grupları haritada sakla
             groups.set(fileA.path, newGroup);
         }
     }
 
+    // Haritadan sonuçları diziye dönüştür
     const result = Array.from(groups.values()).map((files) => {
         const firstFileNormalized = normalizeFileName(files[0]);
         let score = 0;
@@ -151,7 +162,7 @@ export async function POST(request: Request) {
         }
 
         return {
-            files: files.sort(),
+            files: files.sort(), // Dosya listesini alfabetik sırala
             reason: `Dosya adları "${firstFileNormalized}" adına benziyor.`,
             similarityScore: score,
         };
