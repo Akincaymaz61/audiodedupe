@@ -31,7 +31,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast"
-import { FolderSearch, FileScan, Trash2, Loader2, Music2, Folder, AlertTriangle, Info, FolderPlus, Settings, ListMusic, FileX2, FolderX, Search, XCircle, FilterX, PlayCircle, PauseCircle, Download, FileJson } from 'lucide-react';
+import { FolderSearch, FileScan, Trash2, Loader2, Music2, Folder, AlertTriangle, Info, FolderPlus, Settings, ListMusic, FileX2, FolderX, Search, XCircle, FilterX, PlayCircle, PauseCircle, Download, FileJson, SortDesc } from 'lucide-react';
 import type { AppFile, DuplicateGroup, DuplicateGroupWithSelection, FileWithMetadata } from '@/lib/types';
 import { Logo } from './logo';
 import { Badge } from './ui/badge';
@@ -42,6 +42,7 @@ import { ScrollArea } from './ui/scroll-area';
 import { Input } from './ui/input';
 import { Progress } from './ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { findDuplicateGroupsLocally } from '@/lib/local-analyzer';
 import jsmediatags from 'jsmediatags';
 import { cn } from '@/lib/utils';
@@ -52,6 +53,18 @@ const RESULTS_PAGE_SIZE = 50;
 
 type ViewState = 'initial' | 'files_selected' | 'analyzing' | 'results';
 type SelectionStrategy = 'none' | 'keep_highest_quality' | 'keep_lowest_quality' | 'keep_shortest_name';
+type SortOption = 
+  | 'similarity_desc' 
+  | 'similarity_asc' 
+  | 'count_desc' 
+  | 'count_asc';
+
+const sortOptions: Record<SortOption, string> = {
+  similarity_desc: 'Benzerlik Oranı (Yüksekten Düşüğe)',
+  similarity_asc: 'Benzerlik Oranı (Düşükten Yükseğe)',
+  count_desc: 'Dosya Sayısı (Çoktan Aza)',
+  count_asc: 'Dosya Sayısı (Azdan Çoğa)',
+};
 
 
 export default function AudioDedupe() {
@@ -77,6 +90,7 @@ export default function AudioDedupe() {
   const [selectionStrategy, setSelectionStrategy] = useState<SelectionStrategy>('none');
   const [visibleResultsCount, setVisibleResultsCount] = useState(RESULTS_PAGE_SIZE);
   const [activeFolderCard, setActiveFolderCard] = useState<string | null>(null);
+  const [sortOption, setSortOption] = useState<SortOption>('similarity_desc');
 
 
   const { toast } = useToast();
@@ -149,7 +163,7 @@ export default function AudioDedupe() {
             setError("Seçilen dizinde desteklenen formatta ses dosyası bulunamadı.");
             setViewState('initial');
         } else {
-             toast({ title: `${newAppFiles.length} yeni dosya eklendi`, description: `Toplam ${files.length + newAppFiles.length} dosya analize hazır.` });
+             toast({ title: `${newAppAppFiles.length} yeni dosya eklendi`, description: `Toplam ${files.length + newAppFiles.length} dosya analize hazır.` });
         }
     });
   }, [files, fileObjects, toast]);
@@ -383,8 +397,23 @@ export default function AudioDedupe() {
         }
     }
     
-    return filtered;
-  }, [duplicateGroups, filterText, resultsSimilarityFilter, excludeFilterText]);
+    const sorted = [...filtered].sort((a, b) => {
+      switch (sortOption) {
+        case 'similarity_desc':
+          return b.similarityScore - a.similarityScore;
+        case 'similarity_asc':
+          return a.similarityScore - b.similarityScore;
+        case 'count_desc':
+          return b.files.length - a.files.length;
+        case 'count_asc':
+          return a.files.length - b.files.length;
+        default:
+          return 0;
+      }
+    });
+
+    return sorted;
+  }, [duplicateGroups, filterText, resultsSimilarityFilter, excludeFilterText, sortOption]);
 
   const totalSelectedCount = useMemo(() => {
     return filteredDuplicateGroups.reduce((acc, group) => acc + group.selection.size, 0);
@@ -587,29 +616,46 @@ export default function AudioDedupe() {
         <div className="space-y-6">
             <Card>
                 <CardHeader className="flex flex-row items-center justify-between">
-                    <div>
+                    <div className='flex-1'>
                         <CardTitle>Analiz Sonuçları</CardTitle>
                         <CardDescription>{filteredDuplicateGroups.length} grup benzer dosya bulundu.</CardDescription>
                     </div>
-                    <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                           <Button variant="destructive" disabled={totalSelectedCount === 0 || isPending}>
-                             <Trash2 className="mr-2" /> Seçilenleri Sil ({totalSelectedCount})
-                           </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                            <AlertDialogHeader>
-                                <AlertDialogTitle>Emin misiniz?</AlertDialogTitle>
-                                <AlertDialogDescription>
-                                    Bu işlem {totalSelectedCount} dosyayı kalıcı olarak silecektir. Bu eylem geri alınamaz.
-                                </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                                <AlertDialogCancel>İptal</AlertDialogCancel>
-                                <AlertDialogAction onClick={() => handleDeleteSelected(filteredDuplicateGroups)} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">Evet, Sil</AlertDialogAction>
-                            </AlertDialogFooter>
-                        </AlertDialogContent>
-                    </AlertDialog>
+                    <div className='flex items-center gap-2'>
+                       <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="outline">
+                              <SortDesc className="mr-2" />
+                              {sortOptions[sortOption]}
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                             {Object.entries(sortOptions).map(([key, value]) => (
+                                <DropdownMenuItem key={key} onSelect={() => setSortOption(key as SortOption)}>
+                                    {value}
+                                </DropdownMenuItem>
+                            ))}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                        <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                               <Button variant="destructive" disabled={totalSelectedCount === 0 || isPending}>
+                                 <Trash2 className="mr-2" /> Seçilenleri Sil ({totalSelectedCount})
+                               </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                                <AlertDialogHeader>
+                                    <AlertDialogTitle>Emin misiniz?</AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                        Bu işlem {totalSelectedCount} dosyayı kalıcı olarak silecektir. Bu eylem geri alınamaz.
+                                    </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                    <AlertDialogCancel>İptal</AlertDialogCancel>
+                                    <AlertDialogAction onClick={() => handleDeleteSelected(filteredDuplicateGroups)} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">Evet, Sil</AlertDialogAction>
+                                </AlertDialogFooter>
+                            </AlertDialogContent>
+                        </AlertDialog>
+                    </div>
                 </CardHeader>
             </Card>
             <Accordion 
