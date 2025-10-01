@@ -30,6 +30,18 @@ const nextConfig: NextConfig = {
       },
     ],
   },
+  webpack: (config, { isServer }) => {
+    // This is to solve the 'Module not found: Can't resolve 'react-native-fs'' error
+    // caused by jsmediatags library.
+    if (!isServer) {
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        'react-native-fs': false,
+      };
+    }
+     config.externals.push('react-native-fs');
+    return config;
+  },
 };
 
 export default nextConfig;

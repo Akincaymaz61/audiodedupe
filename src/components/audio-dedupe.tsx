@@ -74,6 +74,7 @@ export default function AudioDedupe() {
   const [openAccordionItems, setOpenAccordionItems] = useState<string[]>([]);
   const [currentlyPlaying, setCurrentlyPlaying] = useState<{ path: string; url: string } | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [selectionStrategy, setSelectionStrategy] = useState<SelectionStrategy>('none');
   const [visibleResultsCount, setVisibleResultsCount] = useState(RESULTS_PAGE_SIZE);
 
@@ -427,11 +428,14 @@ export default function AudioDedupe() {
         if (currentlyPlaying && audioRef.current) {
             audioRef.current.src = currentlyPlaying.url;
             audioRef.current.play().catch(e => console.error("Audio play failed:", e));
+            setIsPlaying(true);
+        } else {
+            setIsPlaying(false);
         }
     }, [currentlyPlaying]);
 
     const applySelectionStrategy = () => {
-        if (strategy === 'none') return;
+        if (selectionStrategy === 'none') return;
     
         const newGroups = duplicateGroups.map(group => {
             const filesWithMetaData = group.files
@@ -442,7 +446,7 @@ export default function AudioDedupe() {
     
             let fileToKeep: string;
     
-            switch (strategy) {
+            switch (selectionStrategy) {
                 case 'keep_highest_quality':
                     filesWithMetaData.sort((a, b) => b.bitrate - a.bitrate || b.size - a.size);
                     break;
@@ -577,7 +581,7 @@ export default function AudioDedupe() {
                         {group.files.map(filePath => {
                           const fileName = filePath.split('/').pop() || filePath;
                           const dirPath = filePath.substring(0, filePath.lastIndexOf('/')) || '/';
-                          const isPlaying = currentlyPlaying?.path === filePath;
+                          const isCurrentlyPlaying = currentlyPlaying?.path === filePath;
                           return (
                               <li key={filePath} className="flex items-center gap-4 p-2 rounded-md hover:bg-muted/50 transition-colors">
                                 <Checkbox
@@ -597,7 +601,7 @@ export default function AudioDedupe() {
                                     </p>
                                 </div>
                                 <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handlePlayPause(filePath)}>
-                                    {isPlaying ? <PauseCircle className="text-primary" /> : <PlayCircle />}
+                                    {isCurrentlyPlaying && isPlaying ? <PauseCircle className="text-primary" /> : <PlayCircle />}
                                 </Button>
                               </li>
                           );
@@ -856,7 +860,7 @@ export default function AudioDedupe() {
             <Card className="fixed bottom-4 right-4 w-96 shadow-2xl z-50 p-4 border-primary/20 bg-background/80 backdrop-blur-sm">
                 <div className="flex items-center gap-4">
                     <Button variant="ghost" size="icon" onClick={() => handlePlayPause(currentlyPlaying.path)}>
-                        {audioRef.current?.paused ? <PlayCircle className="h-8 w-8 text-primary"/> : <PauseCircle className="h-8 w-8 text-primary"/>}
+                        {isPlaying ? <PauseCircle className="h-8 w-8 text-primary"/> : <PlayCircle className="h-8 w-8 text-primary"/>}
                     </Button>
                     <div className="flex-1 overflow-hidden">
                         <p className="text-sm font-medium truncate" title={currentlyPlaying.path.split('/').pop()}>
@@ -873,8 +877,8 @@ export default function AudioDedupe() {
                  <audio 
                     ref={audioRef}
                     onEnded={() => setCurrentlyPlaying(null)}
-                    onPause={() => forceUpdate(p => !p)} // Force re-render to update icon
-                    onPlay={() => forceUpdate(p => !p)}
+                    onPause={() => setIsPlaying(false)}
+                    onPlay={() => setIsPlaying(true)}
                     className="w-full mt-2"
                     controls
                     hidden
@@ -884,10 +888,4 @@ export default function AudioDedupe() {
       </SidebarInset>
     </SidebarProvider>
   );
-}
-
-// Helper to force re-render for audio play/pause state
-function useForceUpdate(){
-    const [value, setValue] = useState(false);
-    return () => setValue(!value);
 }
