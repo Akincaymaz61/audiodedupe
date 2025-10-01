@@ -31,7 +31,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast"
-import { FolderSearch, FileScan, Trash2, Loader2, Music2, Folder, AlertTriangle, Info, FolderPlus, Settings, ListMusic, FileX2, FolderX, Search, XCircle, FilterX, PlayCircle, PauseCircle, Download, FileJson, SortDesc } from 'lucide-react';
+import { FolderSearch, FileScan, Trash2, Loader2, Music2, Folder, AlertTriangle, Info, FolderPlus, Settings, ListMusic, FileX2, FolderX, Search, XCircle, FilterX, PlayCircle, PauseCircle, Download, FileJson, SortDesc, Timer, FileDigit, ArrowUpCircle } from 'lucide-react';
 import type { AppFile, DuplicateGroup, DuplicateGroupWithSelection, FileWithMetadata } from '@/lib/types';
 import { Logo } from './logo';
 import { Badge } from './ui/badge';
@@ -58,6 +58,12 @@ type SortOption =
   | 'similarity_asc' 
   | 'count_desc' 
   | 'count_asc';
+
+type AnalysisStats = {
+  duration: number; // in seconds
+  scannedFiles: number;
+  foundGroups: number;
+} | null;
 
 const sortOptions: Record<SortOption, string> = {
   similarity_desc: 'Benzerlik Oranı (Yüksekten Düşüğe)',
@@ -108,6 +114,9 @@ export default function AudioDedupe() {
   const [visibleResultsCount, setVisibleResultsCount] = useState(RESULTS_PAGE_SIZE);
   const [activeFolderCard, setActiveFolderCard] = useState<string | null>(null);
   const [sortOption, setSortOption] = useState<SortOption>('similarity_desc');
+  const [analysisStats, setAnalysisStats] = useState<AnalysisStats>(null);
+  const [showScrollTop, setShowScrollTop] = useState(false);
+  const mainContentRef = useRef<HTMLDivElement>(null);
 
 
   const { toast } = useToast();
@@ -190,6 +199,8 @@ export default function AudioDedupe() {
     setAnalysisProgress(0);
     setError(null);
     setLoadingMessage('Meta veriler okunuyor...');
+    setAnalysisStats(null);
+    const startTime = performance.now();
 
     const filesToRead: File[] = [];
     const newFileObjects = new Map<string, File>();
@@ -254,6 +265,13 @@ export default function AudioDedupe() {
         setResultsSimilarityFilter(similarityThreshold);
         setAnalysisProgress(100);
         
+        const endTime = performance.now();
+        setAnalysisStats({
+          duration: (endTime - startTime) / 1000,
+          scannedFiles: files.length,
+          foundGroups: groupsWithSelection.length,
+        });
+
         const initiallyOpen = groupsWithSelection
             .filter(g => g.files.length === 2)
             .map(g => g.id);
@@ -398,6 +416,7 @@ export default function AudioDedupe() {
     setError(null);
     setViewState('initial');
     setAnalysisProgress(0);
+    setAnalysisStats(null);
     toast({title: "Liste Temizlendi", description: "Tüm dosyalar listeden kaldırıldı."})
   }
 
@@ -568,6 +587,25 @@ export default function AudioDedupe() {
             window.removeEventListener('keydown', handleKeyDown);
         };
     }, [activeFolderCard, removeFolder]);
+    
+    useEffect(() => {
+      const mainEl = mainContentRef.current;
+      const handleScroll = () => {
+        if (mainEl) {
+          setShowScrollTop(mainEl.scrollTop > 300);
+        }
+      };
+      
+      mainEl?.addEventListener('scroll', handleScroll);
+      return () => mainEl?.removeEventListener('scroll', handleScroll);
+    }, []);
+
+    const scrollToTop = () => {
+        mainContentRef.current?.scrollTo({
+            top: 0,
+            behavior: 'smooth',
+        });
+    };
 
     const applySelectionStrategy = () => {
         if (selectionStrategy === 'none') return;
@@ -684,13 +722,25 @@ export default function AudioDedupe() {
 
 
   const renderResultsView = () => {
-    if (filteredDuplicateGroups.length === 0) {
+    if (filteredDuplicateGroups.length === 0 && analysisStats) {
       return (
         <Card className="shadow-lg w-full max-w-lg mx-auto">
-            <CardContent className="p-10 text-center">
+            <CardHeader>
+                <CardTitle>Analiz Tamamlandı</CardTitle>
+            </CardHeader>
+            <CardContent className="p-6 text-center">
               <FileScan className="h-20 w-20 text-primary mx-auto mb-6" />
-              <h2 className="text-2xl font-bold">Analiz Tamamlandı</h2>
               <p className="text-muted-foreground">{filterText || excludeFilterText ? 'Arama kriterlerinize uyan kopya bulunamadı.' : 'Tebrikler! Müzik kütüphanenizde yinelenen dosya bulunamadı.'}</p>
+              <div className="mt-6 flex justify-center gap-4 text-sm text-muted-foreground">
+                    <div className="flex items-center gap-2">
+                        <Timer className="h-4 w-4" />
+                        <span>{analysisStats.duration.toFixed(2)} saniye</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <FileDigit className="h-4 w-4" />
+                        <span>{analysisStats.scannedFiles} dosya</span>
+                    </div>
+                </div>
             </CardContent>
         </Card>
       );
@@ -698,12 +748,18 @@ export default function AudioDedupe() {
 
     return (
         <div className="space-y-6">
+             {analysisStats && (
+                <Card>
+                    <CardHeader>
+                         <CardTitle>Analiz Sonuçları</CardTitle>
+                         <CardDescription>
+                            Tarama {analysisStats.duration.toFixed(2)} saniye sürdü. Toplam {analysisStats.scannedFiles} dosya içinde {analysisStats.foundGroups} yinelenen grup bulundu.
+                         </CardDescription>
+                    </CardHeader>
+                </Card>
+             )}
             <Card>
                 <CardHeader className="flex flex-row items-center justify-between">
-                    <div className='flex-1'>
-                        <CardTitle>Analiz Sonuçları</CardTitle>
-                        <CardDescription>{filteredDuplicateGroups.length} grup benzer dosya bulundu.</CardDescription>
-                    </div>
                     <div className='flex items-center gap-2'>
                        <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -720,26 +776,26 @@ export default function AudioDedupe() {
                             ))}
                           </DropdownMenuContent>
                         </DropdownMenu>
-                        <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                               <Button variant="destructive" disabled={totalSelectedCount === 0 || isPending}>
-                                 <Trash2 className="mr-2" /> Seçilenleri Sil ({totalSelectedCount})
-                               </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                                <AlertDialogHeader>
-                                    <AlertDialogTitle>Emin misiniz?</AlertDialogTitle>
-                                    <AlertDialogDescription>
-                                        Bu işlem {totalSelectedCount} dosyayı kalıcı olarak silecektir. Bu eylem geri alınamaz.
-                                    </AlertDialogDescription>
-                                </AlertDialogHeader>
-                                <AlertDialogFooter>
-                                    <AlertDialogCancel>İptal</AlertDialogCancel>
-                                    <AlertDialogAction onClick={() => handleDeleteSelected(filteredDuplicateGroups)} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">Evet, Sil</AlertDialogAction>
-                                </AlertDialogFooter>
-                            </AlertDialogContent>
-                        </AlertDialog>
                     </div>
+                     <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                           <Button variant="destructive" disabled={totalSelectedCount === 0 || isPending}>
+                             <Trash2 className="mr-2" /> Tüm Seçilenleri Sil ({totalSelectedCount})
+                           </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                            <AlertDialogHeader>
+                                <AlertDialogTitle>Emin misiniz?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                    Bu işlem {totalSelectedCount} dosyayı kalıcı olarak silecektir. Bu eylem geri alınamaz.
+                                </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                                <AlertDialogCancel>İptal</AlertDialogCancel>
+                                <AlertDialogAction onClick={() => handleDeleteSelected(filteredDuplicateGroups)} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">Evet, Sil</AlertDialogAction>
+                            </AlertDialogFooter>
+                        </AlertDialogContent>
+                    </AlertDialog>
                 </CardHeader>
             </Card>
             <Accordion 
@@ -1065,7 +1121,7 @@ export default function AudioDedupe() {
                 </div>
             </div>
         )}
-        <div className="flex-1 overflow-auto">
+        <div ref={mainContentRef} className="flex-1 overflow-auto">
             {renderContent()}
         </div>
         
@@ -1090,6 +1146,17 @@ export default function AudioDedupe() {
                     </Button>
                 </div>
             </Card>
+        )}
+        
+        {showScrollTop && (
+             <Button
+                variant="outline"
+                size="icon"
+                className="fixed bottom-4 right-4 h-12 w-12 rounded-full shadow-2xl z-50 bg-background/80 backdrop-blur-sm"
+                onClick={scrollToTop}
+            >
+                <ArrowUpCircle className="h-6 w-6" />
+            </Button>
         )}
       </SidebarInset>
     </SidebarProvider>
