@@ -163,7 +163,7 @@ export default function AudioDedupe() {
             setError("Seçilen dizinde desteklenen formatta ses dosyası bulunamadı.");
             setViewState('initial');
         } else {
-             toast({ title: `${newAppAppFiles.length} yeni dosya eklendi`, description: `Toplam ${files.length + newAppFiles.length} dosya analize hazır.` });
+             toast({ title: `${newAppFiles.length} yeni dosya eklendi`, description: `Toplam ${files.length + newAppFiles.length} dosya analize hazır.` });
         }
     });
   }, [files, fileObjects, toast]);
