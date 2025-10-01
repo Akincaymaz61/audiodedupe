@@ -31,7 +31,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast"
-import { FolderSearch, FileScan, Trash2, Loader2, Music2, Folder, AlertTriangle, Info, FolderPlus, Settings, ListMusic, FileX2, FolderX, Search, XCircle, FilterX, PlayCircle, PauseCircle, Download, FileJson, SortDesc, Timer, FileDigit, ArrowUpCircle, CheckCheck, X } from 'lucide-react';
+import { FolderSearch, FileScan, Trash2, Loader2, Music2, Folder, AlertTriangle, Info, FolderPlus, Settings, ListMusic, FileX2, FolderX, Search, XCircle, FilterX, PlayCircle, PauseCircle, Download, FileJson, SortDesc, Timer, FileDigit, ArrowUpCircle, CheckCheck, X, FileDown, RotateCcw } from 'lucide-react';
 import type { AppFile, DuplicateGroup, DuplicateGroupWithSelection, FileWithMetadata } from '@/lib/types';
 import { Logo } from './logo';
 import { Badge } from './ui/badge';
@@ -45,6 +45,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { findDuplicateGroupsLocally } from '@/lib/local-analyzer';
 import jsmediatags from 'jsmediatags';
+import * as XLSX from 'xlsx';
 import { cn } from '@/lib/utils';
 
 
@@ -447,6 +448,10 @@ export default function AudioDedupe() {
     setAnalysisStats(null);
     toast({title: "Liste Temizlendi", description: "Tüm dosyalar listeden kaldırıldı."})
   }
+  
+  const handleNewAnalysis = () => {
+    clearAllFiles();
+  };
 
   const selectedFoldersWithCounts = useMemo(() => {
     const folderMap = new Map<string, number>();
@@ -680,6 +685,36 @@ export default function AudioDedupe() {
         setDuplicateGroups(newGroups);
         toast({ title: "Strateji Uygulandı", description: "Yinelenen dosyalar seçilen kurala göre işaretlendi." });
     };
+    
+    const handleExportXLSX = () => {
+        const dataToExport = filteredDuplicateGroups.flatMap(group => 
+            group.files.map(file => ({
+                'Grup ID': group.id,
+                'Benzerlik Oranı (%)': Math.round(group.similarityScore * 100),
+                'Dosya Yolu': file,
+                'Durum': group.selection.has(file) ? 'Silinecek' : 'Korunacak',
+                'Analiz Sebebi': group.reason,
+            }))
+        );
+
+        if (dataToExport.length === 0) {
+            toast({ title: "Dışa aktarılacak veri yok", description: "Lütfen önce bir analiz yapın." });
+            return;
+        }
+
+        const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Yinelenen Dosyalar");
+
+        // Dosya adı oluşturma
+        const date = new Date().toISOString().split('T')[0];
+        const mainFolderName = selectedFolders[0]?.split('/')[0] || 'analiz';
+        const fileName = `${date}-${mainFolderName}.xlsx`;
+
+        XLSX.writeFile(workbook, fileName);
+        toast({ title: "Rapor İndirildi", description: `${fileName} başarıyla oluşturuldu.` });
+    };
+
 
     const visibleGroups = useMemo(() => {
         return filteredDuplicateGroups.slice(0, visibleResultsCount);
@@ -1090,6 +1125,32 @@ export default function AudioDedupe() {
                             </Button>
                             <p className="text-xs text-muted-foreground">Dosya kalitesi, bitrate ve dosya boyutuna göre belirlenir.</p>
                         </div>
+                         <Separator />
+                         <div className="space-y-2">
+                            <Label>Raporlama</Label>
+                            <Button className="w-full" variant="outline" onClick={handleExportXLSX}>
+                                <FileDown className="mr-2" /> Sonuçları XLSX Olarak Aktar
+                            </Button>
+                             <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                  <Button className="w-full" variant="outline">
+                                    <RotateCcw className="mr-2" /> Yeni Analiz Başlat
+                                  </Button>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                    <AlertDialogHeader>
+                                        <AlertDialogTitle>Yeni Analiz Başlatılsın mı?</AlertDialogTitle>
+                                        <AlertDialogDescription>
+                                            Bu işlem tüm mevcut sonuçları ve seçili klasörleri temizleyecektir. Devam etmek istediğinize emin misiniz?
+                                        </AlertDialogDescription>
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter>
+                                        <AlertDialogCancel>İptal</AlertDialogCancel>
+                                        <AlertDialogAction onClick={handleNewAnalysis}>Evet, Sıfırla</AlertDialogAction>
+                                    </AlertDialogFooter>
+                                </AlertDialogContent>
+                            </AlertDialog>
+                         </div>
                         </>
                      )}
                  </div>
@@ -1197,7 +1258,7 @@ export default function AudioDedupe() {
              <Button
                 variant="outline"
                 size="icon"
-                className="fixed bottom-4 right-4 h-12 w-12 rounded-full shadow-2xl z-50 bg-background/80 backdrop-blur-sm"
+                className="fixed bottom-20 right-4 h-12 w-12 rounded-full shadow-2xl z-40 bg-background/80 backdrop-blur-sm"
                 onClick={scrollToTop}
             >
                 <ArrowUpCircle className="h-6 w-6" />
