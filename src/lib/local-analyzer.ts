@@ -46,43 +46,54 @@ function calculateSimilarity(s1: string, s2: string): number {
 const VERSION_MARKERS = [
     'remix', 'live', 'acoustic', 'instrumental', 'radio edit', 
     'reprise', 'bonus', 'demo', 'alternate version', 'unplugged',
-    'rehearsal', 'soundcheck'
+    'rehearsal', 'soundcheck', 'extended', 'club mix'
 ];
 
+/**
+ * Normalizes a file name based on the user's specific format:
+ * [Camelot] - [BPM] - [Artist] - [Title]
+ * @param filePath The full path of the file.
+ * @returns A normalized string containing only the artist and title.
+ */
 function normalizeFileName(filePath: string): string {
     let name = (filePath.split('/').pop() || '').toLowerCase();
     
     // 1. Remove file extension
     name = name.substring(0, name.lastIndexOf('.')) || name;
     
-    // 2. Remove track numbers at the beginning (e.g., "01.", "01 - ", "1. ")
-    name = name.replace(/^\d+\s*[-.]\s*/, '').trim();
+    // 2. Remove _PN (Platinum Notes) suffix
+    name = name.replace(/_pn$/, '').trim();
 
-    // 3. Remove common duplicate markers and copy indicators
-    // This is more aggressive and might remove legitimate numbers, so we handle it carefully
-    name = name.replace(/\(copy\)$/, '').trim(); 
-    name = name.replace(/\(kopya\)$/, '').trim(); 
-    name = name.replace(/copy\s*\d*$/, '').trim(); 
-    name = name.replace(/kopya\s*\d*$/, '').trim(); 
-    name = name.replace(/\(\d+\)$/, '').trim();
-    name = name.replace(/\[\d+\]$/, '').trim();
+    // 3. Split by ' - '
+    const parts = name.split(' - ');
 
-    // 4. Handle version markers (e.g., (remix), [live])
-    let version = '';
-    const nameWithoutVersion = name.replace(/[\[(](.*?)[\])]/g, (match, content) => {
+    let artistAndTitle: string;
+
+    // If there are 4 or more parts, assume [Camelot] - [BPM] - [Artist] - [Title]
+    if (parts.length >= 4) {
+        // Combine artist (3rd part) and title (4th part onwards)
+        artistAndTitle = parts.slice(2).join(' ').trim();
+    } else {
+        // Fallback for names that don't fit the pattern
+        // Remove Camelot notation (e.g., 1a, 11b) and BPM at the start
+        const fallbackName = name.replace(/^\d{1,2}[ab]\s*-\s*\d{2,3}\s*-\s*/, '');
+        artistAndTitle = fallbackName;
+    }
+
+    // Remove version markers like (remix), [live] etc.
+    // This helps group different versions of the same song together
+    let finalName = artistAndTitle.replace(/[\[(](.*?)[\])]/g, (match, content) => {
         const potentialVersion = content.toLowerCase().trim();
         if (VERSION_MARKERS.some(marker => potentialVersion.includes(marker))) {
-            if (!version) version = potentialVersion.split(' ')[0]; // keep only first word of version
-            return ''; // Remove from name
+            return ''; // Remove version marker from name
         }
         return match; // Keep it if it's not a version marker
     }).trim();
+
+    // Finally, remove remaining special characters and extra spaces
+    finalName = finalName.replace(/[^\w\s\d]/gi, ' ').replace(/\s+/g, ' ').trim();
     
-    // 5. Remove special characters and extra spaces from the base name, but keep numbers
-    const baseName = nameWithoutVersion.replace(/[^\w\s\d]/gi, ' ').replace(/\s+/g, ' ').trim();
-    
-    // 6. Construct final normalized name
-    return (version ? `${baseName} ${version}` : baseName).trim();
+    return finalName;
 }
 
 
@@ -106,7 +117,7 @@ export function findDuplicateGroupsLocally(filePaths: string[], similarityThresh
 
     for (let i = 0; i < filesWithNormalizedNames.length; i++) {
         const fileA = filesWithNormalizedNames[i];
-        if (checkedPaths.has(fileA.path)) {
+        if (checkedPaths.has(fileA.path) || !fileA.normalized) {
             continue;
         }
 
@@ -138,7 +149,7 @@ export function findDuplicateGroupsLocally(filePaths: string[], similarityThresh
 
             for (let j = i + 1; j < filesWithNormalizedNames.length; j++) {
                 const fileB = filesWithNormalizedNames[j];
-                if (checkedPaths.has(fileB.path)) {
+                if (checkedPaths.has(fileB.path) || !fileB.normalized) {
                     continue;
                 }
                 
