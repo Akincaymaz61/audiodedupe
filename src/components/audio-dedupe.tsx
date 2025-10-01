@@ -32,8 +32,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast"
 import { findDuplicateGroupsLocally } from '@/lib/local-analyzer';
-import { FolderSearch, FileScan, Trash2, Loader2, Music2, Folder, AlertTriangle, Info, FolderPlus, Settings, ListMusic, FileX2, FolderX, Search, XCircle, FilterX, MinusCircle } from 'lucide-react';
-import type { AppFile, DuplicateGroup, DuplicateGroupWithSelection } from '@/lib/types';
+import { FolderSearch, FileScan, Trash2, Loader2, Music2, Folder, AlertTriangle, Info, FolderPlus, Settings, ListMusic, FileX2, FolderX, Search, XCircle, FilterX, PlayCircle, PauseCircle, Download, FileJson } from 'lucide-react';
+import type { AppFile, DuplicateGroup, DuplicateGroupWithSelection, FileWithMetadata } from '@/lib/types';
 import { Logo } from './logo';
 import { Badge } from './ui/badge';
 import { Separator } from './ui/separator';
@@ -42,15 +42,22 @@ import { Slider } from './ui/slider';
 import { ScrollArea } from './ui/scroll-area';
 import { Input } from './ui/input';
 import { Progress } from './ui/progress';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import jsmediatags from 'jsmediatags';
 
 
 const AUDIO_EXTENSIONS = /\.(mp3|wav|flac|m4a|ogg|aac|aiff)$/i;
 const ANALYSIS_CHUNK_SIZE = 100; // Process 100 files at a time to avoid blocking UI
+const RESULTS_PAGE_SIZE = 50;
 
 type ViewState = 'initial' | 'files_selected' | 'analyzing' | 'results';
+type SelectionStrategy = 'none' | 'keep_highest_quality' | 'keep_lowest_quality' | 'keep_shortest_name';
+
 
 export default function AudioDedupe() {
   const [files, setFiles] = useState<AppFile[]>([]);
+  const [fileObjects, setFileObjects] = useState<Map<string, File>>(new Map());
+  const [filesWithMetadata, setFilesWithMetadata] = useState<Map<string, FileWithMetadata>>(new Map());
   const [duplicateGroups, setDuplicateGroups] = useState<DuplicateGroupWithSelection[]>([]);
   const [loadingMessage, setLoadingMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -65,6 +72,10 @@ export default function AudioDedupe() {
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const analysisStateRef = useRef({ isRunning: false });
   const [openAccordionItems, setOpenAccordionItems] = useState<string[]>([]);
+  const [currentlyPlaying, setCurrentlyPlaying] = useState<{ path: string; url: string } | null>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [selectionStrategy, setSelectionStrategy] = useState<SelectionStrategy>('none');
+  const [visibleResultsCount, setVisibleResultsCount] = useState(RESULTS_PAGE_SIZE);
 
   const { toast } = useToast();
 
@@ -83,63 +94,63 @@ export default function AudioDedupe() {
     setViewState('analyzing');
 
     startTransition(() => {
-        let basePath = '';
+        const newFileObjects = new Map(fileObjects);
+        const newAppFiles: AppFile[] = [];
+        
+        let basePathSet = new Set<string>();
         if (selectedFiles.length > 0 && selectedFiles[0].webkitRelativePath) {
-            const firstPath = selectedFiles[0].webkitRelativePath;
-            const pathParts = firstPath.split('/');
+            const pathParts = selectedFiles[0].webkitRelativePath.split('/');
             if (isRecursive && pathParts.length > 1) {
-                basePath = pathParts[0];
+                basePathSet.add(pathParts[0]);
             }
         }
-
-
-        const newFiles: AppFile[] = Array.from(selectedFiles)
-          .filter(file => AUDIO_EXTENSIONS.test(file.name) && (file.webkitRelativePath || file.name))
-          .map(file => {
-              let relativePath = file.webkitRelativePath || file.name;
-              let fileBasePath = basePath;
+        const basePath = basePathSet.size > 0 ? Array.from(basePathSet)[0] : '';
+        
+        Array.from(selectedFiles).forEach(file => {
+          if (AUDIO_EXTENSIONS.test(file.name)) {
+            const relativePath = file.webkitRelativePath || file.name;
+            if (!newFileObjects.has(relativePath)) {
+              newFileObjects.set(relativePath, file);
               
-              if (!isRecursive) {
-                 const pathParts = relativePath.split('/');
+              let fileBasePath = '';
+              const pathParts = relativePath.split('/');
+
+              if (isRecursive) {
+                  fileBasePath = pathParts.length > 1 ? pathParts.slice(0, -1).join('/') : basePath;
+              } else {
                  if (pathParts.length > 1) {
                     fileBasePath = pathParts.slice(0, -1).join('/');
-                 } else {
-                    fileBasePath = '.'; 
-                 }
-              } else if (!fileBasePath) {
-                 const pathParts = relativePath.split('/');
-                 if (pathParts.length > 1) {
-                    fileBasePath = pathParts[0];
                  }
               }
 
-              return {
+              newAppFiles.push({
                   handle: { name: file.name, kind: 'file' } as unknown as FileSystemFileHandle,
                   parentHandle: { name: '', kind: 'directory' } as unknown as FileSystemDirectoryHandle,
                   name: file.name,
                   path: relativePath,
                   basePath: fileBasePath || 'Bilinmeyen Klasör',
-              }
-          });
+              });
+            }
+          }
+        });
 
-        const uniqueNewFiles = newFiles.filter(nf => !files.some(f => f.path === nf.path));
-
-        if (uniqueNewFiles.length > 0) {
-          setFiles(prevFiles => [...prevFiles, ...uniqueNewFiles].sort((a,b) => a.path.localeCompare(b.path)));
+        if (newAppFiles.length > 0) {
+          setFiles(prevFiles => [...prevFiles, ...newAppFiles].sort((a,b) => a.path.localeCompare(b.path)));
+          setFileObjects(newFileObjects);
         }
         
         setDuplicateGroups([]);
         setViewState('files_selected');
         setLoadingMessage('');
 
-        if (files.length + uniqueNewFiles.length === 0) {
+        if (files.length + newAppFiles.length === 0) {
             setError("Seçilen dizinde desteklenen formatta ses dosyası bulunamadı.");
             setViewState('initial');
         } else {
-             toast({ title: `${uniqueNewFiles.length} yeni dosya eklendi`, description: `Toplam ${files.length + uniqueNewFiles.length} dosya analize hazır.` });
+             toast({ title: `${newAppFiles.length} yeni dosya eklendi`, description: `Toplam ${files.length + newAppFiles.length} dosya analize hazır.` });
         }
     });
-  }, [files, toast]);
+  }, [files, fileObjects, toast]);
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>, isRecursive: boolean) => {
     const selectedFiles = event.target.files;
@@ -148,8 +159,29 @@ export default function AudioDedupe() {
     }
     event.target.value = '';
   };
+  
+  const readMetadata = (file: File): Promise<FileWithMetadata> => {
+      return new Promise((resolve) => {
+        jsmediatags.read(file, {
+            onSuccess: (tag) => {
+                resolve({
+                    path: (file as any).webkitRelativePath || file.name,
+                    size: file.size,
+                    bitrate: tag.tags.TPE1 ? (tag.tags as any).v2.TLEN / 8192 : 0, // Simplified bitrate estimation
+                });
+            },
+            onError: () => {
+                resolve({
+                    path: (file as any).webkitRelativePath || file.name,
+                    size: file.size,
+                    bitrate: 0,
+                });
+            }
+        });
+    });
+  };
 
-   const handleAnalyze = () => {
+   const handleAnalyze = async () => {
     if (files.length === 0) {
       setError('Analiz edilecek dosya yok. Lütfen önce bir klasör seçin.');
       return;
@@ -159,6 +191,22 @@ export default function AudioDedupe() {
     setAnalysisProgress(0);
     setError(null);
     analysisStateRef.current.isRunning = true;
+    
+    setLoadingMessage('Meta veriler okunuyor...');
+    const metadataMap = new Map<string, FileWithMetadata>();
+    const filesToRead = Array.from(fileObjects.values());
+    for (let i = 0; i < filesToRead.length; i++) {
+        const file = filesToRead[i];
+        const path = (file as any).webkitRelativePath || file.name;
+        if (!filesWithMetadata.has(path)) {
+            const meta = await readMetadata(file);
+            metadataMap.set(path, meta);
+        } else {
+            metadataMap.set(path, filesWithMetadata.get(path)!);
+        }
+        setAnalysisProgress((i / filesToRead.length) * 100);
+    }
+    setFilesWithMetadata(metadataMap);
 
     const allFilePaths = files.map(f => f.path);
     let processedCount = 0;
@@ -232,8 +280,11 @@ export default function AudioDedupe() {
   useEffect(() => {
     return () => {
         analysisStateRef.current.isRunning = false;
+        if (currentlyPlaying) {
+          URL.revokeObjectURL(currentlyPlaying.url);
+        }
     };
-  }, []);
+  }, [currentlyPlaying]);
 
   const handleToggleSelection = (groupId: string, filePath: string) => {
     setDuplicateGroups(prev => prev.map(group => {
@@ -272,54 +323,54 @@ export default function AudioDedupe() {
   const clearAllFiles = () => {
     analysisStateRef.current.isRunning = false;
     setFiles([]);
+    setFileObjects(new Map());
+    setFilesWithMetadata(new Map());
     setDuplicateGroups([]);
     setError(null);
     setViewState('initial');
     setAnalysisProgress(0);
     toast({title: "Liste Temizlendi", description: "Tüm dosyalar listeden kaldırıldı."})
   }
-  
+
   const selectedFolders = useMemo(() => {
-    if (files.length === 0) return [];
     const folderSet = new Set<string>();
     files.forEach(file => {
-        const pathParts = file.path.split('/');
-        if (pathParts.length > 1) {
-            folderSet.add(pathParts.slice(0, -1).join('/'));
+      const pathParts = file.path.split('/');
+      if (pathParts.length > 1) {
+        let currentPath = '';
+        for (let i = 0; i < pathParts.length - 1; i++) {
+          currentPath = currentPath ? `${currentPath}/${pathParts[i]}` : pathParts[i];
+          folderSet.add(currentPath);
         }
+      }
     });
-    
-    const allFolders = Array.from(folderSet).sort();
-    
-    const rootFolders = new Set<string>(allFolders.map(f => f.split('/')[0]));
-    
-    return allFolders.filter(folder => {
-        const isRoot = rootFolders.has(folder);
-        // This logic is tricky. Basically, if a folder is a root, but there are also subfolders of it,
-        // we might not want to show the root. This depends on user expectation.
-        // For now, let's show all unique folder paths found.
-        return true;
-    });
-
+    return Array.from(folderSet).sort();
   }, [files]);
 
   const removeFolder = (folderPathToRemove: string) => {
-      setFiles(currentFiles => {
-          const newFiles = currentFiles.filter(file => {
-              const fileFolder = file.path.substring(0, file.path.lastIndexOf('/'));
-              return !(fileFolder === folderPathToRemove || fileFolder.startsWith(folderPathToRemove + '/'));
-          });
+      const newFiles = files.filter(file => !file.path.startsWith(folderPathToRemove + '/'));
+      const newFileObjects = new Map(fileObjects);
+      const newFilesWithMetadata = new Map(filesWithMetadata);
 
-          setDuplicateGroups([]);
-          if (newFiles.length === 0) {
-              setViewState('initial');
-          } else {
-              setViewState('files_selected');
+      for (const path of fileObjects.keys()) {
+          if (path.startsWith(folderPathToRemove + '/')) {
+              newFileObjects.delete(path);
+              newFilesWithMetadata.delete(path);
           }
-          
-          toast({ title: 'Klasör kaldırıldı', description: `${folderPathToRemove} klasörü ve içindekiler listeden çıkarıldı.` });
-          return newFiles;
-      });
+      }
+
+      setFiles(newFiles);
+      setFileObjects(newFileObjects);
+      setFilesWithMetadata(newFilesWithMetadata);
+
+      setDuplicateGroups([]);
+      if (newFiles.length === 0) {
+          setViewState('initial');
+      } else {
+          setViewState('files_selected');
+      }
+      
+      toast({ title: 'Klasör kaldırıldı', description: `${folderPathToRemove} klasörü ve içindekiler listeden çıkarıldı.` });
   };
   
     const filteredDuplicateGroups = useMemo(() => {
@@ -347,18 +398,78 @@ export default function AudioDedupe() {
     return filtered;
   }, [duplicateGroups, filterText, resultsSimilarityFilter, excludeFilterText]);
 
-
   const totalSelectedCount = useMemo(() => {
-    return filteredDuplicateGroups.reduce((acc, group) => {
-        let count = 0;
-        for (const selectedFile of group.selection) {
-            if (group.files.includes(selectedFile)) {
-                count++;
+    return filteredDuplicateGroups.reduce((acc, group) => acc + group.selection.size, 0);
+  }, [filteredDuplicateGroups]);
+
+    const handlePlayPause = (filePath: string) => {
+        if (currentlyPlaying?.path === filePath) {
+            if (audioRef.current) {
+                if (audioRef.current.paused) {
+                    audioRef.current.play();
+                } else {
+                    audioRef.current.pause();
+                }
+            }
+        } else {
+            const file = fileObjects.get(filePath);
+            if (file) {
+                if (currentlyPlaying) {
+                    URL.revokeObjectURL(currentlyPlaying.url);
+                }
+                const url = URL.createObjectURL(file);
+                setCurrentlyPlaying({ path: filePath, url });
             }
         }
-        return acc + count;
-    }, 0);
-}, [filteredDuplicateGroups]);
+    };
+    
+    useEffect(() => {
+        if (currentlyPlaying && audioRef.current) {
+            audioRef.current.src = currentlyPlaying.url;
+            audioRef.current.play().catch(e => console.error("Audio play failed:", e));
+        }
+    }, [currentlyPlaying]);
+
+    const applySelectionStrategy = () => {
+        if (strategy === 'none') return;
+    
+        const newGroups = duplicateGroups.map(group => {
+            const filesWithMetaData = group.files
+                .map(path => {
+                    const meta = filesWithMetadata.get(path) || { path, size: 0, bitrate: 0 };
+                    return { ...meta, name: path.split('/').pop() || path };
+                });
+    
+            let fileToKeep: string;
+    
+            switch (strategy) {
+                case 'keep_highest_quality':
+                    filesWithMetaData.sort((a, b) => b.bitrate - a.bitrate || b.size - a.size);
+                    break;
+                case 'keep_lowest_quality':
+                     filesWithMetaData.sort((a, b) => a.bitrate - b.bitrate || a.size - b.size);
+                    break;
+                case 'keep_shortest_name':
+                    filesWithMetaData.sort((a, b) => a.name.length - b.name.length);
+                    break;
+                default:
+                    return group;
+            }
+            
+            fileToKeep = filesWithMetaData.length > 0 ? filesWithMetaData[0].path : '';
+            
+            const newSelection = new Set(group.files.filter(path => path !== fileToKeep));
+            
+            return { ...group, selection: newSelection };
+        });
+    
+        setDuplicateGroups(newGroups);
+        toast({ title: "Strateji Uygulandı", description: "Yinelenen dosyalar seçilen kurala göre işaretlendi." });
+    };
+
+    const visibleGroups = useMemo(() => {
+        return filteredDuplicateGroups.slice(0, visibleResultsCount);
+    }, [filteredDuplicateGroups, visibleResultsCount]);
   
   const renderInitialView = () => (
       <Card className="shadow-lg w-full max-w-lg mx-auto">
@@ -430,8 +541,8 @@ export default function AudioDedupe() {
                 value={openAccordionItems}
                 onValueChange={setOpenAccordionItems}
             >
-            {filteredDuplicateGroups.map(group => {
-              const isGroupFullySelected = group.selection.size === group.files.length - 1;
+            {visibleGroups.map(group => {
+              const isGroupFullySelected = group.selection.size > 0 && group.selection.size === group.files.length - 1;
               return (
               <Card key={group.id} className="overflow-hidden transition-all duration-300">
                 <AccordionItem value={group.id} className="border-b-0">
@@ -466,6 +577,7 @@ export default function AudioDedupe() {
                         {group.files.map(filePath => {
                           const fileName = filePath.split('/').pop() || filePath;
                           const dirPath = filePath.substring(0, filePath.lastIndexOf('/')) || '/';
+                          const isPlaying = currentlyPlaying?.path === filePath;
                           return (
                               <li key={filePath} className="flex items-center gap-4 p-2 rounded-md hover:bg-muted/50 transition-colors">
                                 <Checkbox
@@ -484,6 +596,9 @@ export default function AudioDedupe() {
                                       <span className="truncate" title={dirPath}>{dirPath}</span>
                                     </p>
                                 </div>
+                                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handlePlayPause(filePath)}>
+                                    {isPlaying ? <PauseCircle className="text-primary" /> : <PlayCircle />}
+                                </Button>
                               </li>
                           );
                         })}
@@ -495,6 +610,14 @@ export default function AudioDedupe() {
               )
             })}
           </Accordion>
+           {filteredDuplicateGroups.length > visibleResultsCount && (
+                <div className="text-center mt-6">
+                    <Button onClick={() => setVisibleResultsCount(c => c + RESULTS_PAGE_SIZE)}>
+                        <Download className="mr-2 h-4 w-4" />
+                        Daha Fazla Yükle ({visibleResultsCount} / {filteredDuplicateGroups.length})
+                    </Button>
+                </div>
+            )}
         </div>
       );
   }
@@ -521,7 +644,6 @@ export default function AudioDedupe() {
         }
     }
     
-    // Default to initial view
     return renderInitialView();
   };
   
@@ -534,6 +656,7 @@ export default function AudioDedupe() {
           onChange={(e) => handleFileSelect(e, false)}
           webkitdirectory="true"
           mozdirectory="true"
+          multiple
         />
         <input 
           type="file" 
@@ -569,7 +692,7 @@ export default function AudioDedupe() {
                           onValueChange={(value) => setSimilarityThreshold(value[0])}
                           disabled={isPending || viewState === 'analyzing'}
                         />
-                        <p className="text-xs text-muted-foreground">Analiz için kullanılacak eşik. Düşük değerler daha fazla kopya bulur.</p>
+                        <p className="text-xs text-muted-foreground">Düşük değerler daha fazla kopya bulur.</p>
                       </div>
 
                      <Button className="w-full" onClick={handleAnalyze} disabled={isPending || files.length === 0 || viewState === 'analyzing'}>
@@ -591,7 +714,6 @@ export default function AudioDedupe() {
                                 value={[resultsSimilarityFilter]}
                                 onValueChange={(value) => setResultsSimilarityFilter(value[0])}
                                 />
-                                <p className="text-xs text-muted-foreground">Sonuçları yeni bir eşiğe göre filtreleyin.</p>
                             </div>
                          <div className="relative">
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -631,6 +753,25 @@ export default function AudioDedupe() {
                                 </Button>
                             )}
                         </div>
+                        <Separator />
+                        <div className="space-y-2">
+                            <Label>Otomatik Seçim Stratejisi</Label>
+                             <Select onValueChange={(value: SelectionStrategy) => setSelectionStrategy(value)} defaultValue="none">
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Bir strateji seçin..." />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="none">Manuel Seçim</SelectItem>
+                                    <SelectItem value="keep_highest_quality">En Yüksek Kaliteliyi Tut</SelectItem>
+                                    <SelectItem value="keep_lowest_quality">En Düşük Kaliteliyi Tut</SelectItem>
+                                    <SelectItem value="keep_shortest_name">En Kısa Dosya Adını Tut</SelectItem>
+                                </SelectContent>
+                            </Select>
+                            <Button className="w-full" variant="outline" onClick={applySelectionStrategy} disabled={selectionStrategy === 'none'}>
+                                <FileJson className="mr-2" /> Stratejiyi Uygula
+                            </Button>
+                            <p className="text-xs text-muted-foreground">Dosya kalitesi, bitrate ve dosya boyutuna göre belirlenir.</p>
+                        </div>
                         </>
                      )}
                  </div>
@@ -642,7 +783,7 @@ export default function AudioDedupe() {
                      Taranan Klasörler ({selectedFolders.length})
                  </SidebarGroupLabel>
                  {selectedFolders.length > 0 ? (
-                    <ScrollArea className="h-72 w-full rounded-md border">
+                    <ScrollArea className="h-60 w-full rounded-md border">
                         <div className="p-1">
                             {selectedFolders.map(folder => (
                                 <div key={folder} className="group flex items-center justify-between p-2 rounded-md hover:bg-muted/50">
@@ -687,7 +828,7 @@ export default function AudioDedupe() {
             </Button>
           </SidebarFooter>
       </Sidebar>
-      <SidebarInset className="max-w-7xl mx-auto p-4 md:p-8">
+      <SidebarInset className="max-w-7xl mx-auto p-4 md:p-8 flex flex-col">
           <div className="flex items-center justify-between mb-8">
             <div className="flex items-center gap-4">
                 <SidebarTrigger className="md:hidden" />
@@ -707,9 +848,46 @@ export default function AudioDedupe() {
                 </div>
             </div>
         )}
-        {renderContent()}
-
+        <div className="flex-1 overflow-auto">
+            {renderContent()}
+        </div>
+        
+        {currentlyPlaying && (
+            <Card className="fixed bottom-4 right-4 w-96 shadow-2xl z-50 p-4 border-primary/20 bg-background/80 backdrop-blur-sm">
+                <div className="flex items-center gap-4">
+                    <Button variant="ghost" size="icon" onClick={() => handlePlayPause(currentlyPlaying.path)}>
+                        {audioRef.current?.paused ? <PlayCircle className="h-8 w-8 text-primary"/> : <PauseCircle className="h-8 w-8 text-primary"/>}
+                    </Button>
+                    <div className="flex-1 overflow-hidden">
+                        <p className="text-sm font-medium truncate" title={currentlyPlaying.path.split('/').pop()}>
+                            {currentlyPlaying.path.split('/').pop()}
+                        </p>
+                         <p className="text-xs text-muted-foreground truncate" title={currentlyPlaying.path}>
+                            Şimdi Oynatılıyor...
+                        </p>
+                    </div>
+                     <Button variant="ghost" size="icon" onClick={() => setCurrentlyPlaying(null)}>
+                        <XCircle className="h-5 w-5"/>
+                    </Button>
+                </div>
+                 <audio 
+                    ref={audioRef}
+                    onEnded={() => setCurrentlyPlaying(null)}
+                    onPause={() => forceUpdate(p => !p)} // Force re-render to update icon
+                    onPlay={() => forceUpdate(p => !p)}
+                    className="w-full mt-2"
+                    controls
+                    hidden
+                />
+            </Card>
+        )}
       </SidebarInset>
     </SidebarProvider>
   );
+}
+
+// Helper to force re-render for audio play/pause state
+function useForceUpdate(){
+    const [value, setValue] = useState(false);
+    return () => setValue(!value);
 }

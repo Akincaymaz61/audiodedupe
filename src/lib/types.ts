@@ -17,4 +17,8 @@ export type DuplicateGroupWithSelection = DuplicateGroup & {
   selection: Set<string>;
 };
 
-    
+export type FileWithMetadata = {
+  path: string;
+  size: number;
+  bitrate: number;
+}
