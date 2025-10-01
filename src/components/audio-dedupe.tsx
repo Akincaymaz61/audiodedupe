@@ -196,47 +196,42 @@ export default function AudioDedupe() {
   }
   
   const selectedFolders = useMemo(() => {
-    if (files.length === 0) return [];
-    
-    // Check if files come from a single root directory selection (recursive)
-    const commonPathParts = files[0].path.split('/');
-    const singleRootDir = commonPathParts.length > 1 ? commonPathParts[0] : null;
+      if (files.length === 0) return [];
 
-    if (singleRootDir && files.every(f => f.path.startsWith(singleRootDir + '/'))) {
-       // All files are inside a single root directory, but `webkitRelativePath` doesn't include the root folder itself.
-       // The first part of the path is likely the selected folder's name.
-       const rootFolderName = files[0].path.split('/')[0];
-       return [rootFolderName];
-    }
-
-    // Multiple folders selected, or files from root
-    const folderSet = new Set<string>();
-    files.forEach(file => {
-        const parts = file.path.split('/');
-        // If path is "Artist/Song.mp3", the folder is "Artist"
-        if (parts.length > 1) {
-            folderSet.add(parts[0]);
-        } else {
-            // If path is just "Song.mp3", it's in the root.
-            folderSet.add('/'); 
-        }
-    });
-    return Array.from(folderSet).sort();
-}, [files]);
+      const folderSet = new Set<string>();
+      files.forEach(file => {
+          const parts = file.path.split('/');
+          if (parts.length > 1) {
+              // Add all parent directories
+              let currentPath = '';
+              for (let i = 0; i < parts.length - 1; i++) {
+                  currentPath = currentPath ? `${currentPath}/${parts[i]}` : parts[i];
+                  folderSet.add(currentPath);
+              }
+          } else {
+              folderSet.add('/');
+          }
+      });
+      return Array.from(folderSet).sort();
+  }, [files]);
 
   const removeFolder = (folderPath: string) => {
-      // If folderPath is '/', it means files in the root directory
-      const newFiles = folderPath === '/' 
-          ? files.filter(file => file.path.includes('/'))
-          : files.filter(file => !file.path.startsWith(folderPath + '/'));
-      
+      const newFiles = files.filter(file => {
+          if (folderPath === '/') {
+              // Remove only root files
+              return file.path.includes('/');
+          }
+          // Remove files in the folder and its subfolders
+          return !file.path.startsWith(folderPath + '/') && file.path !== folderPath;
+      });
+
       setFiles(newFiles);
       setDuplicateGroups([]);
       setViewState(newFiles.length > 0 ? 'files_selected' : 'initial');
-      
+
       const message = folderPath === '/'
           ? 'Kök dizindeki dosyalar kaldırıldı.'
-          : `${folderPath} klasöründeki tüm dosyalar listeden çıkarıldı.`;
+          : `${folderPath} klasöründeki ve alt klasörlerindeki tüm dosyalar listeden çıkarıldı.`;
 
       toast({ title: 'Klasör kaldırıldı', description: message });
   };
