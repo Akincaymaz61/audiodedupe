@@ -96,45 +96,73 @@ function normalizeFileName(filePath: string): string {
     return finalName;
 }
 
-export function findDuplicateGroupsLocally(filePaths: string[], similarityThreshold: number): DuplicateGroup[] {
-  const filesWithNormalizedNames = filePaths.map(path => ({
-      path,
-      normalized: normalizeFileName(path)
-  }));
-  
-  const groups: Map<string, string[]> = new Map();
-  const checkedPaths = new Set<string>();
 
-  for (let i = 0; i < filesWithNormalizedNames.length; i++) {
-      const fileA = filesWithNormalizedNames[i];
+export function findDuplicateGroupsLocally(filePaths: string[], similarityThreshold: number): DuplicateGroup[] {
+  const normalizedMap = new Map<string, string[]>();
+
+  // 1. Adım: Dosyaları normalize edilmiş adlarına göre önceden grupla (Çok Hızlı)
+  for (const path of filePaths) {
+      const normalized = normalizeFileName(path);
+      if (!normalized) continue;
       
-      if (checkedPaths.has(fileA.path) || !fileA.normalized) {
+      if (!normalizedMap.has(normalized)) {
+          normalizedMap.set(normalized, []);
+      }
+      normalizedMap.get(normalized)!.push(path);
+  }
+  
+  const initialGroups = Array.from(normalizedMap.values());
+  const finalGroups: string[][] = [];
+  const processedGroups = new Set<number>();
+
+  // 2. Adım: Sadece grup anahtarları (normalize edilmiş adlar) arasında benzerlik kontrolü yap
+  const groupKeys = Array.from(normalizedMap.keys());
+  
+  for (let i = 0; i < groupKeys.length; i++) {
+      if (processedGroups.has(i)) {
           continue;
       }
-
-      const newGroup = [fileA.path];
       
-      for (let j = i + 1; j < filesWithNormalizedNames.length; j++) {
-          const fileB = filesWithNormalizedNames[j];
-          if (checkedPaths.has(fileB.path) || !fileB.normalized) {
+      const currentGroupFiles = normalizedMap.get(groupKeys[i])!;
+      const mergedGroup = [...currentGroupFiles];
+      processedGroups.add(i);
+
+      for (let j = i + 1; j < groupKeys.length; j++) {
+          if (processedGroups.has(j)) {
               continue;
           }
           
-          const similarity = calculateSimilarity(fileA.normalized, fileB.normalized);
-
+          const similarity = calculateSimilarity(groupKeys[i], groupKeys[j]);
+          
           if (similarity >= similarityThreshold) {
-              newGroup.push(fileB.path);
-              checkedPaths.add(fileB.path);
+              const groupToMerge = normalizedMap.get(groupKeys[j])!;
+              mergedGroup.push(...groupToMerge);
+              processedGroups.add(j);
           }
       }
-
-      if (newGroup.length > 1) {
-          checkedPaths.add(fileA.path);
-          groups.set(fileA.path, newGroup);
+      if(mergedGroup.length > 1){
+        finalGroups.push(mergedGroup);
       }
   }
+    
+    // Grupları tam eşleşenleri de dahil ederek birleştir
+    initialGroups.forEach(group => {
+        if(group.length > 1) {
+            let found = false;
+            for(const finalGroup of finalGroups) {
+                if(finalGroup.includes(group[0])) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                finalGroups.push(group);
+            }
+        }
+    });
 
-  return Array.from(groups.values()).map((files) => {
+
+  return finalGroups.map((files) => {
       const firstFileNormalized = normalizeFileName(files[0]);
       let score = 0;
       if (files.length > 1) {
