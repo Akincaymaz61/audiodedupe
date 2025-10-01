@@ -32,6 +32,7 @@ function calculateLevenshtein(a: string, b: string): number {
 }
 
 function calculateSimilarity(s1: string, s2: string): number {
+    if (!s1 || !s2) return 0;
     const longer = s1.length > s2.length ? s1 : s2;
     const shorter = s1.length > s2.length ? s2 : s1;
     if (longer.length === 0) {
@@ -43,46 +44,45 @@ function calculateSimilarity(s1: string, s2: string): number {
 
 
 const VERSION_MARKERS = [
-    '(remix)', '[remix]',
-    '(live)', '[live]',
-    '(acoustic)', '[acoustic]',
-    '(instrumental)', '[instrumental]',
-    '(radio edit)', '[radio edit]',
-    '- remix', '- live', '- acoustic', '- instrumental', '- radio edit'
+    'remix', 'live', 'acoustic', 'instrumental', 'radio edit', 
+    'reprise', 'bonus', 'demo', 'alternate version', 'unplugged',
+    'rehearsal', 'soundcheck'
 ];
 
 function normalizeFileName(filePath: string): string {
     let name = (filePath.split('/').pop() || '').toLowerCase();
-    // Remove extension
+    
+    // 1. Remove file extension
     name = name.substring(0, name.lastIndexOf('.')) || name;
-    // Remove common duplicate markers
+    
+    // 2. Remove track numbers at the beginning (e.g., "01.", "01 - ", "1. ")
+    name = name.replace(/^\d+\s*[-.]\s*/, '').trim();
+
+    // 3. Remove common duplicate markers and copy indicators
     name = name.replace(/\(\d+\)$/, '').trim(); // (1), (2)
     name = name.replace(/\[\d+\]$/, '').trim(); // [1], [2]
     name = name.replace(/-\s*\d+$/, '').trim(); // - 1, -2
-    name = name.replace(/-\s*copy\s*\d*$/, '').trim(); // - copy, - copy 2
-    name = name.replace(/-\s*kopya\s*\d*$/, '').trim(); // - kopya, - kopya 2
+    name = name.replace(/copy\s*\d*$/, '').trim(); // copy, copy 2
+    name = name.replace(/kopya\s*\d*$/, '').trim(); // kopya, kopya 2
     name = name.replace(/\(copy\)$/, '').trim(); // (copy)
     name = name.replace(/\(kopya\)$/, '').trim(); // (kopya)
-    
-    // Temporarily remove version markers for base comparison
-    let baseName = name;
-    for (const marker of VERSION_MARKERS) {
-        baseName = baseName.replace(marker, '').trim();
-    }
-    
-    // Remove special characters from the base name
-    baseName = baseName.replace(/[^\w\s]/gi, '').trim();
-    
-    // Add back a simplified version marker if one was present
-    for (const marker of VERSION_MARKERS) {
-        if (name.includes(marker)) {
-            const simplifiedMarker = marker.replace(/[\(\)\[\]-]/g, '').trim().split(' ')[0];
-             // Return base name + simplified marker to distinguish versions
-            return `${baseName} ${simplifiedMarker}`;
-        }
-    }
 
-    return baseName;
+    // 4. Handle version markers (e.g., (remix), [live])
+    let version = '';
+    const nameWithoutVersion = name.replace(/[\[(](.*?)[\])]/g, (match, content) => {
+        const potentialVersion = content.toLowerCase().trim();
+        if (VERSION_MARKERS.some(marker => potentialVersion.includes(marker))) {
+            if (!version) version = potentialVersion.split(' ')[0]; // keep only first word of version
+            return ''; // Remove from name
+        }
+        return match; // Keep it if it's not a version marker
+    }).trim();
+    
+    // 5. Remove special characters and extra spaces from the base name
+    const baseName = nameWithoutVersion.replace(/[^\w\s]/gi, ' ').replace(/\s+/g, ' ').trim();
+    
+    // 6. Construct final normalized name
+    return (version ? `${baseName} ${version}` : baseName).trim();
 }
 
 
@@ -90,75 +90,91 @@ function normalizeFileName(filePath: string): string {
  * Finds duplicate audio files in a given list of file paths based on file name similarity.
  * This function runs entirely on the client-side and is optimized for performance.
  * @param filePaths An array of file paths.
+ * @param similarityThreshold The minimum similarity score to consider files as duplicates.
  * @returns An array of duplicate groups.
  */
-export function findDuplicateGroupsLocally(filePaths: string[]): DuplicateGroup[] {
-    const SIMILARITY_THRESHOLD = 0.90; // Stricter threshold
+export function findDuplicateGroupsLocally(filePaths: string[], similarityThreshold = 0.85): DuplicateGroup[] {
+    if (filePaths.length < 2) return [];
 
-    // Map normalized names to a list of original file paths
-    const normalizedMap: Map<string, string[]> = new Map();
+    const filesWithNormalizedNames = filePaths.map(path => ({
+        path,
+        normalized: normalizeFileName(path)
+    }));
 
-    filePaths.forEach(path => {
-        const normalized = normalizeFileName(path);
-        if (!normalizedMap.has(normalized)) {
-            normalizedMap.set(normalized, []);
-        }
-        normalizedMap.get(normalized)!.push(path);
-    });
-
-    const potentialGroups: string[][] = Array.from(normalizedMap.values());
-    const finalGroups: DuplicateGroup[] = [];
+    const groups: Map<string, string[]> = new Map();
     const checkedPaths = new Set<string>();
 
-    // Phase 1: Group exact normalized matches
-    potentialGroups.forEach(group => {
-        if (group.length > 1) {
-            finalGroups.push({
-                files: group.sort(),
-                reason: `Dosya adları "${normalizeFileName(group[0])}" olarak normalleştirildi.`,
-                similarityScore: 1.0, // Exact normalized match
-            });
-            group.forEach(path => checkedPaths.add(path));
+    for (let i = 0; i < filesWithNormalizedNames.length; i++) {
+        const fileA = filesWithNormalizedNames[i];
+        if (checkedPaths.has(fileA.path)) {
+            continue;
         }
-    });
-    
-    // Phase 2: Check for near-matches among remaining unique normalized names
-    const singleFileKeys = Array.from(normalizedMap.keys()).filter(key => normalizedMap.get(key)!.length === 1);
 
-    for (let i = 0; i < singleFileKeys.length; i++) {
-        const key1 = singleFileKeys[i];
-        const path1 = normalizedMap.get(key1)![0];
-        if (checkedPaths.has(path1)) continue;
-
-        const currentGroup: string[] = [path1];
+        let bestMatchKey: string | null = null;
         let maxSimilarity = 0;
+        let bestGroup: string[] | null = null;
 
-        for (let j = i + 1; j < singleFileKeys.length; j++) {
-            const key2 = singleFileKeys[j];
-            const path2 = normalizedMap.get(key2)![0];
-            if (checkedPaths.has(path2)) continue;
-
-            const similarity = calculateSimilarity(key1, key2);
-
-            if (similarity > SIMILARITY_THRESHOLD) {
-                currentGroup.push(path2);
-                checkedPaths.add(path2); // Mark as checked to avoid re-grouping
-                if (similarity > maxSimilarity) {
-                    maxSimilarity = similarity;
-                }
+        // Try to find an existing group to join
+        for (const [key, existingGroup] of groups.entries()) {
+            const representativePath = existingGroup[0];
+            const representativeNormalized = filesWithNormalizedNames.find(f=>f.path === representativePath)!.normalized;
+            const similarity = calculateSimilarity(fileA.normalized, representativeNormalized);
+            
+            if (similarity > similarityThreshold && similarity > maxSimilarity) {
+                maxSimilarity = similarity;
+                bestMatchKey = key;
+                bestGroup = existingGroup;
             }
         }
+        
+        // If a suitable group is found, add the file to it
+        if (bestGroup && bestMatchKey) {
+            bestGroup.push(fileA.path);
+            checkedPaths.add(fileA.path);
+        } else {
+            // Otherwise, start a new group with the current file as the representative
+            const newGroup = [fileA.path];
+            checkedPaths.add(fileA.path);
 
-        if (currentGroup.length > 1) {
-             finalGroups.push({
-                files: currentGroup.sort(),
-                reason: `Dosya adları "${key1}" adına benziyor.`,
-                similarityScore: maxSimilarity,
-            });
-            currentGroup.forEach(path => checkedPaths.add(path));
+            for (let j = i + 1; j < filesWithNormalizedNames.length; j++) {
+                const fileB = filesWithNormalizedNames[j];
+                if (checkedPaths.has(fileB.path)) {
+                    continue;
+                }
+                
+                const similarity = calculateSimilarity(fileA.normalized, fileB.normalized);
+
+                if (similarity >= similarityThreshold) {
+                    newGroup.push(fileB.path);
+                    checkedPaths.add(fileB.path);
+                     if (similarity > maxSimilarity) {
+                        maxSimilarity = similarity;
+                    }
+                }
+            }
+
+            if (newGroup.length > 1) {
+                groups.set(fileA.path, newGroup);
+            }
         }
     }
 
+    return Array.from(groups.entries()).map(([key, files]) => {
+        const normalizedKey = filesWithNormalizedNames.find(f=>f.path === key)!.normalized;
+        
+        let maxSim = 0;
+        if (files.length > 1) {
+            const sim = calculateSimilarity(
+                filesWithNormalizedNames.find(f => f.path === files[0])!.normalized,
+                filesWithNormalizedNames.find(f => f.path === files[1])!.normalized
+            );
+            maxSim = sim;
+        }
 
-    return finalGroups;
+        return {
+            files: files.sort(),
+            reason: `Dosya adları "${normalizedKey}" adına benziyor.`,
+            similarityScore: maxSim,
+        };
+    }).filter(group => group.files.length > 1);
 }
