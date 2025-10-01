@@ -3,7 +3,7 @@ export type AppFile = {
   parentHandle: FileSystemDirectoryHandle;
   name: string;
   path: string;
-  basePath?: string;
+  basePath: string;
 };
 
 export type DuplicateGroup = {

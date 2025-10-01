@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, useTransition, useRef } from 'react';
+import { useState, useMemo, useCallback, useTransition, useRef, useEffect } from 'react';
 import {
   Sidebar,
   SidebarProvider,
@@ -33,7 +33,7 @@ import {
 import { useToast } from "@/hooks/use-toast"
 import { findDuplicateGroupsLocally } from '@/lib/local-analyzer';
 import { FolderSearch, FileScan, Trash2, Loader2, Music2, Folder, AlertTriangle, Info, FolderPlus, Settings, ListMusic, FileX2, FolderX, Search, XCircle, FilterX, MinusCircle } from 'lucide-react';
-import type { AppFile, DuplicateGroupWithSelection } from '@/lib/types';
+import type { AppFile, DuplicateGroup, DuplicateGroupWithSelection } from '@/lib/types';
 import { Logo } from './logo';
 import { Badge } from './ui/badge';
 import { Separator } from './ui/separator';
@@ -41,8 +41,11 @@ import { Label } from './ui/label';
 import { Slider } from './ui/slider';
 import { ScrollArea } from './ui/scroll-area';
 import { Input } from './ui/input';
+import { Progress } from './ui/progress';
+
 
 const AUDIO_EXTENSIONS = /\.(mp3|wav|flac|m4a|ogg|aac|aiff)$/i;
+const ANALYSIS_CHUNK_SIZE = 100; // Process 100 files at a time to avoid blocking UI
 
 type ViewState = 'initial' | 'files_selected' | 'analyzing' | 'results';
 
@@ -59,6 +62,8 @@ export default function AudioDedupe() {
   const [filterText, setFilterText] = useState('');
   const [resultsSimilarityFilter, setResultsSimilarityFilter] = useState(0.85);
   const [excludeFilterText, setExcludeFilterText] = useState('');
+  const [analysisProgress, setAnalysisProgress] = useState(0);
+  const analysisStateRef = useRef({ isRunning: false });
 
   const { toast } = useToast();
 
@@ -78,24 +83,37 @@ export default function AudioDedupe() {
 
     startTransition(() => {
         let basePath = '';
-        if (isRecursive && selectedFiles.length > 0 && selectedFiles[0].webkitRelativePath) {
+        if (selectedFiles.length > 0 && selectedFiles[0].webkitRelativePath) {
             const firstPath = selectedFiles[0].webkitRelativePath;
-            basePath = firstPath.split('/')[0];
+            const pathParts = firstPath.split('/');
+            // If selecting a folder recursively, the base path is the folder name itself.
+            if (isRecursive && pathParts.length > 1) {
+                basePath = pathParts[0];
+            }
         }
+
 
         const newFiles: AppFile[] = Array.from(selectedFiles)
           .filter(file => AUDIO_EXTENSIONS.test(file.name) && (file.webkitRelativePath || file.name))
           .map(file => {
               let relativePath = file.webkitRelativePath || file.name;
-              // For recursive selections, we want to store paths relative to the *inside* of the selected folder.
-              // But for the UI, we'll keep the top-level selected folder. So we just map it.
+              let fileBasePath = basePath;
+              
+              if (!fileBasePath) {
+                 const pathParts = relativePath.split('/');
+                 if (pathParts.length > 1) {
+                    fileBasePath = pathParts[0];
+                 } else {
+                    fileBasePath = relativePath;
+                 }
+              }
+
               return {
                   handle: { name: file.name, kind: 'file' } as unknown as FileSystemFileHandle,
                   parentHandle: { name: '', kind: 'directory' } as unknown as FileSystemDirectoryHandle,
                   name: file.name,
                   path: relativePath,
-                  // We add a basePath property to know which root folder it belongs to.
-                  basePath: relativePath.split('/')[0]
+                  basePath: fileBasePath,
               }
           });
 
@@ -127,43 +145,90 @@ export default function AudioDedupe() {
     event.target.value = '';
   };
 
-  const handleAnalyze = () => {
+   const handleAnalyze = () => {
     if (files.length === 0) {
       setError('Analiz edilecek dosya yok. Lütfen önce bir klasör seçin.');
       return;
     }
     
     setViewState('analyzing');
-    setLoadingMessage(`Dosyalar analiz ediliyor... Bu işlem yerel olarak yapılıyor ve büyük kütüphanelerde zaman alabilir.`);
+    setAnalysisProgress(0);
     setError(null);
-    startTransition(() => {
-      try {
-        const filePaths = files.map(f => f.path);
-        const result = findDuplicateGroupsLocally(filePaths, similarityThreshold);
+    analysisStateRef.current.isRunning = true;
 
-        const groupsWithSelection = result
-          .map((group, index) => ({
-            ...group,
-            id: `group-${index}`,
-            selection: new Set(group.files.slice(1)), // Auto-select all but the first one
-          }))
-          .sort((a, b) => b.similarityScore - a.similarityScore);
+    const allFilePaths = files.map(f => f.path);
+    let processedCount = 0;
+    const allGroups: DuplicateGroup[] = [];
+    let groupIndex = 0;
 
-        setDuplicateGroups(groupsWithSelection);
-        setResultsSimilarityFilter(similarityThreshold);
-        if (groupsWithSelection.length === 0) {
-            toast({ title: "Kopya bulunamadı", description: "Analiz tamamlandı ancak yinelenen grup tespit edilmedi." });
+    const processChunk = (startIndex: number) => {
+        if (!analysisStateRef.current.isRunning) {
+            console.log("Analysis cancelled.");
+            return;
         }
-      } catch (e) {
-          const errorMessage = e instanceof Error ? e.message : 'Analiz sırasında beklenmedik bir hata oluştu.';
-          setError(errorMessage);
-          toast({ title: "Analiz Hatası", description: errorMessage, variant: "destructive" });
-      } finally {
-        setViewState('results');
-        setLoadingMessage('');
-      }
-    });
+
+        const endIndex = Math.min(startIndex + ANALYSIS_CHUNK_SIZE, allFilePaths.length);
+        const chunk = allFilePaths.slice(startIndex, endIndex);
+
+        try {
+            const chunkResult = findDuplicateGroupsLocally(chunk, similarityThreshold, allFilePaths.slice(0, startIndex));
+            
+            if (chunkResult.length > 0) {
+              allGroups.push(...chunkResult);
+            }
+
+            processedCount = endIndex;
+            const progress = (processedCount / allFilePaths.length) * 100;
+            setAnalysisProgress(progress);
+            setLoadingMessage(`${processedCount} / ${allFilePaths.length} dosya analiz edildi...`);
+
+            if (endIndex < allFilePaths.length) {
+                // Yield to the main thread before processing the next chunk
+                setTimeout(() => processChunk(endIndex), 0);
+            } else {
+                // Analysis is complete
+                const groupsWithSelection = allGroups
+                    .map((group) => ({
+                        ...group,
+                        id: `group-${groupIndex++}`,
+                        selection: new Set(group.files.slice(1)),
+                    }))
+                    .sort((a, b) => b.similarityScore - a.similarityScore);
+                
+                setDuplicateGroups(groupsWithSelection);
+                setResultsSimilarityFilter(similarityThreshold);
+                
+                if (groupsWithSelection.length === 0) {
+                    toast({ title: "Kopya bulunamadı", description: "Analiz tamamlandı ancak yinelenen grup tespit edilmedi." });
+                } else {
+                    toast({ title: "Analiz Tamamlandı", description: `${groupsWithSelection.length} yinelenen grup bulundu.` });
+                }
+
+                setViewState('results');
+                setLoadingMessage('');
+                analysisStateRef.current.isRunning = false;
+            }
+        } catch (e) {
+            const errorMessage = e instanceof Error ? e.message : 'Analiz sırasında beklenmedik bir hata oluştu.';
+            setError(errorMessage);
+            toast({ title: "Analiz Hatası", description: errorMessage, variant: "destructive" });
+            setViewState('results'); // Go to results view even on error
+            setLoadingMessage('');
+            analysisStateRef.current.isRunning = false;
+        }
+    };
+    
+    // Start the first chunk processing
+    setLoadingMessage(`0 / ${allFilePaths.length} dosya analiz edildi...`);
+    setTimeout(() => processChunk(0), 100);
   };
+
+  useEffect(() => {
+    // Cleanup function to stop analysis if component unmounts
+    return () => {
+        analysisStateRef.current.isRunning = false;
+    };
+  }, []);
 
   const handleToggleSelection = (groupId: string, filePath: string) => {
     setDuplicateGroups(prev => prev.map(group => {
@@ -201,10 +266,12 @@ export default function AudioDedupe() {
   };
   
   const clearAllFiles = () => {
+    analysisStateRef.current.isRunning = false;
     setFiles([]);
     setDuplicateGroups([]);
     setError(null);
     setViewState('initial');
+    setAnalysisProgress(0);
     toast({title: "Liste Temizlendi", description: "Tüm dosyalar listeden kaldırıldı."})
   }
   
@@ -214,47 +281,28 @@ export default function AudioDedupe() {
 
     files.forEach(file => {
         const parts = file.path.split('/');
-        // If path is like 'Music/Artist/Song.mp3', parts.length - 1 is 2. We want to add 'Music/Artist'.
         if (parts.length > 1) {
             let currentPath = '';
-            // We iterate up to the second to last part to get all parent dirs
             for (let i = 0; i < parts.length - 1; i++) {
                 currentPath = currentPath ? `${currentPath}/${parts[i]}` : parts[i];
                 folderSet.add(currentPath);
             }
         }
-        // If file is at root of a selection, we add its basePath.
-        else if (file.basePath) {
-            folderSet.add(file.basePath);
-        }
     });
-
-    const allFolders = Array.from(folderSet).sort();
     
-    // Determine the root folders chosen by the user
-    const rootFolders = new Set<string>();
-    files.forEach(f => {
-        if(f.basePath) rootFolders.add(f.basePath);
-    });
-
-    // If a folder is a root folder that was selected recursively, we don't show it.
-    // We only show its subfolders.
-    return allFolders.filter(folder => {
-        const isRoot = rootFolders.has(folder);
-        const wasRecursive = files.some(f => f.basePath === folder && f.path.split('/').length > 1);
-        return !(isRoot && wasRecursive);
-    });
+    const allFolders = Array.from(folderSet).sort();
+    const rootFolders = new Set<string>(files.map(f => f.basePath).filter(Boolean) as string[]);
+    
+    // If a folder is a root folder selected recursively, we don't want to show it, only its children.
+    return allFolders.filter(folder => !rootFolders.has(folder));
 
   }, [files]);
 
   const removeFolder = (folderPathToRemove: string) => {
       setFiles(currentFiles => {
           const newFiles = currentFiles.filter(file => {
-              // The path of the directory containing the file
-              const fileFolder = file.path.substring(0, file.path.lastIndexOf('/')) || file.basePath;
-              // Check if the file's folder path starts with the folder to remove.
-              // This handles nested directories correctly.
-              return !(fileFolder && (fileFolder === folderPathToRemove || fileFolder.startsWith(folderPathToRemove + '/')));
+              const fileFolder = file.path.substring(0, file.path.lastIndexOf('/'));
+              return !(fileFolder === folderPathToRemove || fileFolder.startsWith(folderPathToRemove + '/'));
           });
 
           setDuplicateGroups([]);
@@ -445,22 +493,25 @@ export default function AudioDedupe() {
     if (viewState === 'analyzing') {
        return (
             <Card className="shadow-lg w-full max-w-lg mx-auto">
-                <CardContent className="p-10 text-center">
-                  <div className="flex flex-col items-center justify-center text-center p-10">
+                <CardContent className="p-10 text-center space-y-6">
+                  <div className="flex flex-col items-center justify-center text-center">
                     <Loader2 className="h-16 w-16 animate-spin text-primary mb-6" />
                     <h2 className="text-2xl font-bold mb-2">Analiz Ediliyor</h2>
-                    <p className="text-muted-foreground">{loadingMessage}</p>
+                    <p className="text-muted-foreground mb-4">{loadingMessage}</p>
+                    <Progress value={analysisProgress} className="w-full" />
                   </div>
                 </CardContent>
             </Card>
        );
     }
     
-    if (viewState === 'results') {
-        return renderResultsView();
+    if (viewState === 'results' || (viewState === 'files_selected' && files.length > 0)) {
+        if (duplicateGroups.length > 0 || viewState === 'results') {
+            return renderResultsView();
+        }
     }
     
-    // Default to initial view if no files are selected
+    // Default to initial view
     return renderInitialView();
   };
   
@@ -512,8 +563,8 @@ export default function AudioDedupe() {
                       </div>
 
                      <Button className="w-full" onClick={handleAnalyze} disabled={isPending || files.length === 0 || viewState === 'analyzing'}>
-                         <FileScan />
-                         Analizi Başlat
+                         {viewState === 'analyzing' ? <Loader2 className="animate-spin" /> : <FileScan />}
+                         {viewState === 'analyzing' ? 'Analiz Ediliyor...' : 'Analizi Başlat'}
                      </Button>
                      
                      {viewState === 'results' && (
