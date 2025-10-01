@@ -637,9 +637,35 @@ export default function AudioDedupe() {
                                  <ListMusic className="w-5 h-5 text-primary" />
                                  <p className="font-semibold text-lg">{group.files.length} Benzer Dosya Grubu</p>
                              </div>
-                             <Badge variant={group.similarityScore > 0.9 ? 'default' : 'secondary'}>
-                                Benzerlik: {Math.round(group.similarityScore * 100)}%
-                             </Badge>
+                             <div className='flex items-center gap-2'>
+                               <Badge variant={group.similarityScore > 0.9 ? 'default' : 'secondary'}>
+                                  Benzerlik: {Math.round(group.similarityScore * 100)}%
+                               </Badge>
+                               <AlertDialog>
+                                    <AlertDialogTrigger asChild>
+                                        <Button
+                                            variant="destructive"
+                                            size="sm"
+                                            disabled={group.selection.size === 0}
+                                            onClick={(e) => e.stopPropagation()} // Akordiyonu aç/kapatmayı engelle
+                                        >
+                                            <Trash2 className="mr-2 h-4 w-4" /> Sil ({group.selection.size})
+                                        </Button>
+                                    </AlertDialogTrigger>
+                                    <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+                                        <AlertDialogHeader>
+                                            <AlertDialogTitle>Bu Gruptaki Seçili Dosyaları Sil?</AlertDialogTitle>
+                                            <AlertDialogDescription>
+                                                Bu işlem seçili {group.selection.size} dosyayı kalıcı olarak silecektir. Bu eylem geri alınamaz.
+                                            </AlertDialogDescription>
+                                        </AlertDialogHeader>
+                                        <AlertDialogFooter>
+                                            <AlertDialogCancel>İptal</AlertDialogCancel>
+                                            <AlertDialogAction onClick={() => handleDeleteSelected([group])} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">Evet, Sil</AlertDialogAction>
+                                        </AlertDialogFooter>
+                                    </AlertDialogContent>
+                                </AlertDialog>
+                             </div>
                           </div>
                           <div className="flex items-center text-sm text-muted-foreground mt-1 gap-2">
                             <Info className="w-4 h-4 flex-shrink-0"/>
