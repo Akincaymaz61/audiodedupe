@@ -31,7 +31,6 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast"
-import { findDuplicateGroupsLocally } from '@/lib/local-analyzer';
 import { FolderSearch, FileScan, Trash2, Loader2, Music2, Folder, AlertTriangle, Info, FolderPlus, Settings, ListMusic, FileX2, FolderX, Search, XCircle, FilterX, PlayCircle, PauseCircle, Download, FileJson } from 'lucide-react';
 import type { AppFile, DuplicateGroup, DuplicateGroupWithSelection, FileWithMetadata } from '@/lib/types';
 import { Logo } from './logo';
@@ -47,7 +46,6 @@ import jsmediatags from 'jsmediatags';
 
 
 const AUDIO_EXTENSIONS = /\.(mp3|wav|flac|m4a|ogg|aac|aiff)$/i;
-const ANALYSIS_CHUNK_SIZE = 100; // Process 100 files at a time to avoid blocking UI
 const RESULTS_PAGE_SIZE = 50;
 
 type ViewState = 'initial' | 'files_selected' | 'analyzing' | 'results';
@@ -70,7 +68,6 @@ export default function AudioDedupe() {
   const [resultsSimilarityFilter, setResultsSimilarityFilter] = useState(0.85);
   const [excludeFilterText, setExcludeFilterText] = useState('');
   const [analysisProgress, setAnalysisProgress] = useState(0);
-  const analysisStateRef = useRef({ isRunning: false });
   const [openAccordionItems, setOpenAccordionItems] = useState<string[]>([]);
   const [currentlyPlaying, setCurrentlyPlaying] = useState<{ path: string; url: string } | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -192,7 +189,6 @@ export default function AudioDedupe() {
     setViewState('analyzing');
     setAnalysisProgress(0);
     setError(null);
-    analysisStateRef.current.isRunning = true;
     
     setLoadingMessage('Meta veriler okunuyor...');
     const metadataMap = new Map<string, FileWithMetadata>();
@@ -206,82 +202,69 @@ export default function AudioDedupe() {
         } else {
             metadataMap.set(path, filesWithMetadata.get(path)!);
         }
-        setAnalysisProgress((i / filesToRead.length) * 100);
+        setAnalysisProgress(50 * (i / filesToRead.length)); // Metadata reading is first 50%
     }
     setFilesWithMetadata(metadataMap);
 
-    const allFilePaths = files.map(f => f.path);
-    let processedCount = 0;
-    const allGroups: DuplicateGroup[] = [];
-    let groupIndex = 0;
+    setLoadingMessage('Benzer dosyalar sunucuda analiz ediliyor...');
+    try {
+        const allFilePaths = files.map(f => f.path);
+        const response = await fetch('/api/analyze', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                filePaths: allFilePaths,
+                similarityThreshold,
+            }),
+        });
 
-    const processChunk = (startIndex: number) => {
-        if (!analysisStateRef.current.isRunning) {
-            console.log("Analysis cancelled.");
-            return;
+        setAnalysisProgress(75); // Moved to analysis stage
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'Sunucu analizi sırasında bir hata oluştu.');
         }
 
-        const endIndex = Math.min(startIndex + ANALYSIS_CHUNK_SIZE, allFilePaths.length);
-        const chunk = allFilePaths.slice(startIndex, endIndex);
+        const groups: DuplicateGroup[] = await response.json();
+        let groupIndex = 0;
 
-        try {
-            const chunkResult = findDuplicateGroupsLocally(chunk, similarityThreshold, allFilePaths.slice(0, startIndex));
-            
-            if (chunkResult.length > 0) {
-              allGroups.push(...chunkResult);
-            }
-
-            processedCount = endIndex;
-            const progress = (processedCount / allFilePaths.length) * 100;
-            setAnalysisProgress(progress);
-            setLoadingMessage(`${processedCount} / ${allFilePaths.length} dosya analiz edildi...`);
-
-            if (endIndex < allFilePaths.length) {
-                setTimeout(() => processChunk(endIndex), 0);
-            } else {
-                const groupsWithSelection = allGroups
-                    .map((group) => ({
-                        ...group,
-                        id: `group-${groupIndex++}`,
-                        selection: new Set(group.files.slice(1)),
-                    }))
-                    .sort((a, b) => b.similarityScore - a.similarityScore);
-                
-                setDuplicateGroups(groupsWithSelection);
-                setResultsSimilarityFilter(similarityThreshold);
-                
-                const initiallyOpen = groupsWithSelection
-                    .filter(g => g.files.length === 2)
-                    .map(g => g.id);
-                setOpenAccordionItems(initiallyOpen);
-                
-                if (groupsWithSelection.length === 0) {
-                    toast({ title: "Kopya bulunamadı", description: "Analiz tamamlandı ancak yinelenen grup tespit edilmedi." });
-                } else {
-                    toast({ title: "Analiz Tamamlandı", description: `${groupsWithSelection.length} yinelenen grup bulundu.` });
-                }
-
-                setViewState('results');
-                setLoadingMessage('');
-                analysisStateRef.current.isRunning = false;
-            }
-        } catch (e) {
-            const errorMessage = e instanceof Error ? e.message : 'Analiz sırasında beklenmedik bir hata oluştu.';
-            setError(errorMessage);
-            toast({ title: "Analiz Hatası", description: errorMessage, variant: "destructive" });
-            setViewState('results');
-            setLoadingMessage('');
-            analysisStateRef.current.isRunning = false;
+        const groupsWithSelection = groups
+            .map((group) => ({
+                ...group,
+                id: `group-${groupIndex++}`,
+                selection: new Set(group.files.slice(1)),
+            }))
+            .sort((a, b) => b.similarityScore - a.similarityScore);
+        
+        setDuplicateGroups(groupsWithSelection);
+        setResultsSimilarityFilter(similarityThreshold);
+        setAnalysisProgress(100);
+        
+        const initiallyOpen = groupsWithSelection
+            .filter(g => g.files.length === 2)
+            .map(g => g.id);
+        setOpenAccordionItems(initiallyOpen);
+        
+        if (groupsWithSelection.length === 0) {
+            toast({ title: "Kopya bulunamadı", description: "Analiz tamamlandı ancak yinelenen grup tespit edilmedi." });
+        } else {
+            toast({ title: "Analiz Tamamlandı", description: `${groupsWithSelection.length} yinelenen grup bulundu.` });
         }
-    };
-    
-    setLoadingMessage(`0 / ${allFilePaths.length} dosya analiz edildi...`);
-    setTimeout(() => processChunk(0), 100);
+
+        setViewState('results');
+        setLoadingMessage('');
+
+    } catch (e) {
+        const errorMessage = e instanceof Error ? e.message : 'Analiz sırasında beklenmedik bir hata oluştu.';
+        setError(errorMessage);
+        toast({ title: "Analiz Hatası", description: errorMessage, variant: "destructive" });
+        setViewState('results');
+        setLoadingMessage('');
+    }
   };
 
   useEffect(() => {
     return () => {
-        analysisStateRef.current.isRunning = false;
         if (currentlyPlaying) {
           URL.revokeObjectURL(currentlyPlaying.url);
         }
@@ -323,7 +306,6 @@ export default function AudioDedupe() {
   };
   
   const clearAllFiles = () => {
-    analysisStateRef.current.isRunning = false;
     setFiles([]);
     setFileObjects(new Map());
     setFilesWithMetadata(new Map());
@@ -426,12 +408,29 @@ export default function AudioDedupe() {
     };
     
     useEffect(() => {
-        if (currentlyPlaying && audioRef.current) {
-            audioRef.current.src = currentlyPlaying.url;
-            audioRef.current.play().catch(e => console.error("Audio play failed:", e));
-            setIsPlaying(true);
-        } else {
-            setIsPlaying(false);
+        if (audioRef.current) {
+            const audio = audioRef.current;
+            const handlePlay = () => setIsPlaying(true);
+            const handlePause = () => setIsPlaying(false);
+            const handleEnded = () => setCurrentlyPlaying(null);
+
+            audio.addEventListener('play', handlePlay);
+            audio.addEventListener('pause', handlePause);
+            audio.addEventListener('ended', handleEnded);
+            
+            if (currentlyPlaying) {
+                audio.src = currentlyPlaying.url;
+                audio.play().catch(e => console.error("Audio play failed:", e));
+            } else {
+                audio.pause();
+                audio.src = "";
+            }
+    
+            return () => {
+                audio.removeEventListener('play', handlePlay);
+                audio.removeEventListener('pause', handlePause);
+                audio.removeEventListener('ended', handleEnded);
+            };
         }
     }, [currentlyPlaying]);
 
@@ -483,7 +482,7 @@ export default function AudioDedupe() {
               <FolderSearch className="h-20 w-20 text-primary" />
             </div>
             <h2 className="text-2xl font-bold mb-2">Taramaya Başlayın</h2>
-            <p className="text-muted-foreground mb-6">Yinelenen ses dosyalarını bulmak için müzik klasör(ler)inizi seçin. Yerel, hızlı ve güvenli.</p>
+            <p className="text-muted-foreground mb-6">Yinelenen ses dosyalarını bulmak için müzik klasör(ler)inizi seçin. Analiz sunucuda yapılır, hızlı ve güvenlidir.</p>
             <div className="flex gap-4 justify-center">
                 <Button size="lg" onClick={() => handleSelectDirectory(false)} disabled={isPending}>
                   <FolderPlus className="mr-2 h-5 w-5" />
@@ -857,6 +856,8 @@ export default function AudioDedupe() {
             {renderContent()}
         </div>
         
+        <audio ref={audioRef} hidden />
+
         {currentlyPlaying && (
             <Card className="fixed bottom-4 right-4 w-96 shadow-2xl z-50 p-4 border-primary/20 bg-background/80 backdrop-blur-sm">
                 <div className="flex items-center gap-4">
@@ -871,19 +872,10 @@ export default function AudioDedupe() {
                             Şimdi Oynatılıyor...
                         </p>
                     </div>
-                     <Button variant="ghost" size="icon" onClick={() => setCurrentlyPlaying(null)}>
+                     <Button variant="ghost" size="icon" onClick={() => { setCurrentlyPlaying(null); }}>
                         <XCircle className="h-5 w-5"/>
                     </Button>
                 </div>
-                 <audio 
-                    ref={audioRef}
-                    onEnded={() => setCurrentlyPlaying(null)}
-                    onPause={() => setIsPlaying(false)}
-                    onPlay={() => setIsPlaying(true)}
-                    className="w-full mt-2"
-                    controls
-                    hidden
-                />
             </Card>
         )}
       </SidebarInset>

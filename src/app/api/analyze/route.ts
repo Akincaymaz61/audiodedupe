@@ -1,6 +1,8 @@
-import type { DuplicateGroup } from './types';
+import { NextResponse } from 'next/server';
 
-// Levenshtein distance calculation
+export const runtime = 'edge'; // Vercel Edge Fonksiyonu olarak çalıştır
+
+// Levenshtein mesafesi hesaplama fonksiyonu
 function calculateLevenshtein(a: string, b: string): number {
     const an = a ? a.length : 0;
     const bn = b ? b.length : 0;
@@ -31,6 +33,7 @@ function calculateLevenshtein(a: string, b: string): number {
     return matrix[bn][an];
 }
 
+// İki string arasındaki benzerlik oranını hesaplar
 function calculateSimilarity(s1: string, s2: string): number {
     if (!s1 || !s2) return 0;
     const longer = s1.length > s2.length ? s1 : s2;
@@ -42,7 +45,6 @@ function calculateSimilarity(s1: string, s2: string): number {
     return (longer.length - distance) / longer.length;
 }
 
-
 const VERSION_MARKERS = [
     'remix', 'live', 'acoustic', 'instrumental', 'radio edit', 
     'reprise', 'bonus', 'demo', 'alternate version', 'unplugged',
@@ -50,126 +52,78 @@ const VERSION_MARKERS = [
     'edit', 'version', 'dub'
 ];
 
-/**
- * Normalizes a file name based on the user's specific format:
- * [Camelot] - [BPM] - [Artist] - [Title]
- * @param filePath The full path of the file.
- * @returns A normalized string containing only the artist and title.
- */
+// Dosya adını normalize eder
 function normalizeFileName(filePath: string): string {
     let name = (filePath.split('/').pop() || '').toLowerCase();
     
-    // 1. Remove file extension
     name = name.substring(0, name.lastIndexOf('.')) || name;
-    
-    // 2. Remove _PN (Platinum Notes) suffix
     name = name.replace(/_pn$/, '').trim();
 
-    // 3. Split by ' - '
     const parts = name.split(' - ');
-
     let artistAndTitle: string;
 
-    // If there are 3 or more parts, assume a structure like [KEY] - [ARTIST] - [TITLE] or [KEY] - [BPM] - [ARTIST] - [TITLE]
     if (parts.length >= 3) {
-         // Check if the first part is a Camelot key (e.g., "1a", "10b")
         const isCamelot = /^\d{1,2}[ab]$/.test(parts[0].trim());
-        // Check if the second part looks like BPM (e.g., "124")
         const isBpm = /^\d{2,3}$/.test(parts[1].trim());
 
         if (isCamelot && isBpm && parts.length >= 4) {
-             // Format: [KEY] - [BPM] - [ARTIST] - [TITLE]
             artistAndTitle = parts.slice(2).join(' ');
         } else if (isCamelot) {
-            // Format: [KEY] - [ARTIST] - [TITLE]
             artistAndTitle = parts.slice(1).join(' ');
-        }
-        else {
-            // Not a recognized pattern, use the whole name
+        } else {
             artistAndTitle = parts.join(' ');
         }
     } else {
-        // Fallback for names that don't fit the pattern (e.g., "Artist - Title")
         artistAndTitle = name;
     }
 
-    // Remove version markers like (remix), [live] etc.
     let finalName = artistAndTitle.replace(/[\[(](.*?)[\])]/g, (match, content) => {
         const potentialVersion = content.toLowerCase().trim();
         if (VERSION_MARKERS.some(marker => potentialVersion.includes(marker))) {
-            return ''; // Remove version marker from name
+            return '';
         }
-        return match; // Keep it if it's not a version marker
+        return match;
     }).trim();
     
-    // Also remove version markers that are not in parentheses
     for (const marker of VERSION_MARKERS) {
-        // Match marker with word boundaries to avoid replacing parts of words
         const regex = new RegExp(`\\b${marker}\\b`, 'gi');
         finalName = finalName.replace(regex, '');
     }
 
-
-    // Finally, remove remaining special characters and extra spaces
     finalName = finalName.replace(/[^\w\s\d]/gi, ' ').replace(/\s+/g, ' ').trim();
-    
-    // After all removals, if the name ends with just a number (likely a track number), remove it.
     finalName = finalName.replace(/-\s*\d{1,3}\s*$/, '').trim();
     finalName = finalName.replace(/\s+\d{1,3}$/, '').trim();
-
 
     return finalName;
 }
 
+export async function POST(request: Request) {
+  try {
+    const { filePaths, similarityThreshold = 0.85 } = await request.json();
 
-/**
- * Finds duplicate audio files in a given list of file paths based on file name similarity.
- * This function runs entirely on the client-side.
- * @param filePaths An array of file paths to check for duplicates.
- * @param similarityThreshold The minimum similarity score to consider files as duplicates.
- * @param existingPaths An optional array of paths that have already been processed to check against.
- * @returns An array of duplicate groups found within the `filePaths` chunk.
- */
-export function findDuplicateGroupsLocally(
-    filePaths: string[], 
-    similarityThreshold = 0.85, 
-    existingPaths: string[] = []
-): DuplicateGroup[] {
-    if (filePaths.length === 0) return [];
+    if (!Array.isArray(filePaths) || filePaths.length === 0) {
+      return NextResponse.json({ error: 'filePaths array is required.' }, { status: 400 });
+    }
 
-    const allPaths = [...existingPaths, ...filePaths];
-    
-    const filesWithNormalizedNames = allPaths.map(path => ({
+    const filesWithNormalizedNames = filePaths.map(path => ({
         path,
         normalized: normalizeFileName(path)
     }));
     
-    const normalizedMap: Map<string, {path: string, normalized: string}> = new Map();
-    filesWithNormalizedNames.forEach(f => normalizedMap.set(f.path, f));
-
     const groups: Map<string, string[]> = new Map();
     const checkedPaths = new Set<string>();
 
-    // Only iterate through the new chunk of files
-    const chunkFilePaths = new Set(filePaths);
-
-    for (let i = 0; i < allPaths.length; i++) {
-        const fileA = normalizedMap.get(allPaths[i])!;
+    for (let i = 0; i < filesWithNormalizedNames.length; i++) {
+        const fileA = filesWithNormalizedNames[i];
         
-        // Only start a new group search for files in the current chunk
-        if (!chunkFilePaths.has(fileA.path)) {
-            continue;
-        }
-
         if (checkedPaths.has(fileA.path) || !fileA.normalized) {
             continue;
         }
 
         const newGroup = [fileA.path];
-        let maxSimilarity = 0;
-
-        for (let j = i + 1; j < allPaths.length; j++) {
-            const fileB = normalizedMap.get(allPaths[j])!;
+        
+        for (let j = i + 1; j < filesWithNormalizedNames.length; j++) {
+            const fileB = filesWithNormalizedNames[j];
             if (checkedPaths.has(fileB.path) || !fileB.normalized) {
                 continue;
             }
@@ -178,28 +132,21 @@ export function findDuplicateGroupsLocally(
 
             if (similarity >= similarityThreshold) {
                 newGroup.push(fileB.path);
-                // Mark B as checked so it doesn't start its own group search.
-                // This is important for performance.
                 checkedPaths.add(fileB.path);
-                 if (similarity > maxSimilarity) {
-                    maxSimilarity = similarity;
-                }
             }
         }
 
         if (newGroup.length > 1) {
-            // Mark A as checked since it's now part of a group.
             checkedPaths.add(fileA.path);
             groups.set(fileA.path, newGroup);
         }
     }
 
-    return Array.from(groups.values()).map((files) => {
-        const firstFileNormalized = normalizedMap.get(files[0])?.normalized || 'yok';
-        
+    const result = Array.from(groups.values()).map((files) => {
+        const firstFileNormalized = normalizeFileName(files[0]);
         let score = 0;
         if (files.length > 1) {
-            const secondFileNormalized = normalizedMap.get(files[1])?.normalized || 'yok';
+            const secondFileNormalized = normalizeFileName(files[1]);
             score = calculateSimilarity(firstFileNormalized, secondFileNormalized);
         }
 
@@ -209,4 +156,11 @@ export function findDuplicateGroupsLocally(
             similarityScore: score,
         };
     }).filter(group => group.files.length > 1);
+
+    return NextResponse.json(result);
+
+  } catch (error) {
+    console.error('Analysis API error:', error);
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+  }
 }
