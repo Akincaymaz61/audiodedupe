@@ -191,18 +191,16 @@ export default function AudioDedupe() {
     });
   };
 
-  const verifyPermissions = async (): Promise<boolean> => {
-    const parentHandles = new Set<FileSystemDirectoryHandle>();
-    files.forEach(file => parentHandles.add(file.parentHandle));
-    
+  const verifyPermissions = async (handles: FileSystemDirectoryHandle[]): Promise<boolean> => {
     try {
-      for (const handle of parentHandles) {
+      for (const handle of handles) {
         const permission = await handle.queryPermission({ mode: 'readwrite' });
-        if (permission !== 'granted') {
-          const request = await handle.requestPermission({ mode: 'readwrite' });
-          if (request !== 'granted') {
-            throw new Error("Dosyalara erişmek için gerekli izin verilmedi.");
-          }
+        if (permission === 'granted') {
+          continue;
+        }
+        const request = await handle.requestPermission({ mode: 'readwrite' });
+        if (request !== 'granted') {
+          throw new Error("Dosyalara erişmek ve silmek için gerekli izin verilmedi.");
         }
       }
       return true;
@@ -226,9 +224,11 @@ export default function AudioDedupe() {
     setError(null);
     setLoadingMessage('İzinler kontrol ediliyor...');
     
-    const permissionsGranted = await verifyPermissions();
+    const parentHandles = Array.from(new Set(files.map(file => file.parentHandle)));
+    const permissionsGranted = await verifyPermissions(parentHandles);
     if (!permissionsGranted || analysisCancellation.current) {
       setViewState('files_selected');
+      setLoadingMessage('');
       return;
     }
 
@@ -240,16 +240,22 @@ export default function AudioDedupe() {
     const newFileObjects = new Map<string, File>();
 
     try {
-        const filePromises = files
-            .filter(appFile => !fileObjects.has(appFile.path))
-            .map(async (appFile) => {
-                const file = await appFile.handle.getFile();
-                filesToRead.push(file);
-                newFileObjects.set(appFile.path, file);
-            });
+        const filesToProcess = files.filter(appFile => !fileObjects.has(appFile.path));
         
-        await Promise.all(filePromises);
-        if (analysisCancellation.current) return;
+        for (const appFile of filesToProcess) {
+            if (analysisCancellation.current) return;
+            // Her dosya okunmadan önce izni tekrar doğrula
+            const isGranted = await verifyPermissions([appFile.parentHandle]);
+            if (!isGranted) {
+                setViewState('files_selected');
+                setLoadingMessage('');
+                return;
+            }
+            const file = await appFile.handle.getFile();
+            filesToRead.push(file);
+            newFileObjects.set(appFile.path, file);
+        }
+
         setFileObjects(prev => new Map([...prev, ...newFileObjects]));
 
     } catch (e) {
@@ -409,18 +415,12 @@ export default function AudioDedupe() {
       let deletedCount = 0;
       let errorCount = 0;
       
-      const parentHandles = new Set<FileSystemDirectoryHandle>();
-      filesToDelete.forEach(file => parentHandles.add(file.parentHandle));
-      
+      const parentHandles = Array.from(new Set(Array.from(filesToDelete.values()).map(file => file.parentHandle)));
+
       try {
-          for(const handle of parentHandles){
-             const permission = await handle.queryPermission({ mode: 'readwrite' });
-             if (permission !== 'granted') {
-                const request = await handle.requestPermission({ mode: 'readwrite' });
-                if(request !== 'granted'){
-                    throw new Error("Dosyaları silmek için gerekli izin verilmedi.");
-                }
-             }
+          const permissionsGranted = await verifyPermissions(parentHandles);
+          if (!permissionsGranted) {
+              return;
           }
 
           const deletionPromises = Array.from(filesToDelete.values()).map(async (file) => {
@@ -604,7 +604,7 @@ export default function AudioDedupe() {
                     try {
                         const fileBlob = await appFile.handle.getFile();
                         const newFileObjects = new Map(fileObjects);
-                        newFileObjects.set(filePath, fileBlob);
+newFileObjects.set(filePath, fileBlob);
                         setFileObjects(newFileObjects);
                         const url = URL.createObjectURL(fileBlob);
                         setCurrentlyPlaying({ path: filePath, url });
@@ -1299,5 +1299,3 @@ export default function AudioDedupe() {
     </SidebarProvider>
   );
 }
-
-    
