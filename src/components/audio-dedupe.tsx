@@ -94,8 +94,7 @@ async function getFilesFromDirectory(dirHandle: FileSystemDirectoryHandle, recur
 }
 
 export default function AudioDedupe() {
-  const [files, setFiles] = useState<AppFile[]>([]);
-  const [fileObjects, setFileObjects] = useState<Map<string, File>>(new Map());
+  const [appFiles, setAppFiles] = useState<AppFile[]>([]);
   const [filesWithMetadata, setFilesWithMetadata] = useState<Map<string, FileWithMetadata>>(new Map());
   const [duplicateGroups, setDuplicateGroups] = useState<DuplicateGroupWithSelection[]>([]);
   const [loadingMessage, setLoadingMessage] = useState('');
@@ -139,12 +138,12 @@ export default function AudioDedupe() {
                 const newAppFiles = await getFilesFromDirectory(dirHandle, recursive, dirHandle.name);
                 
                 if (newAppFiles.length > 0) {
-                    const existingPaths = new Set(files.map(f => f.path));
+                    const existingPaths = new Set(appFiles.map(f => f.path));
                     const uniqueNewFiles = newAppFiles.filter(f => !existingPaths.has(f.path));
                     
                     if (uniqueNewFiles.length > 0) {
-                        setFiles(prevFiles => [...prevFiles, ...uniqueNewFiles].sort((a,b) => a.path.localeCompare(b.path)));
-                        toast({ title: `${uniqueNewFiles.length} yeni dosya eklendi`, description: `Toplam ${files.length + uniqueNewFiles.length} dosya analize hazır.` });
+                        setAppFiles(prevFiles => [...prevFiles, ...uniqueNewFiles].sort((a,b) => a.path.localeCompare(b.path)));
+                        toast({ title: `${uniqueNewFiles.length} yeni dosya eklendi`, description: `Toplam ${appFiles.length + uniqueNewFiles.length} dosya analize hazır.` });
                     } else {
                         toast({ title: "Yeni dosya eklenmedi", description: "Seçilen klasördeki dosyalar zaten listede mevcut.", variant: "default" });
                     }
@@ -154,7 +153,7 @@ export default function AudioDedupe() {
                 setViewState('files_selected');
                 setLoadingMessage('');
 
-                if (files.length + newAppFiles.length === 0) {
+                if (appFiles.length + newAppFiles.length === 0) {
                     setError("Seçilen dizinde desteklenen formatta ses dosyası bulunamadı.");
                     setViewState('initial');
                 }
@@ -164,12 +163,12 @@ export default function AudioDedupe() {
                  console.error('Klasör seçme hatası:', err);
                  setError(`Klasör seçilemedi: ${(err as Error).message}`);
             }
-            setViewState(files.length > 0 ? 'files_selected' : 'initial');
+            setViewState(appFiles.length > 0 ? 'files_selected' : 'initial');
             setLoadingMessage('');
         }
     };
   
-  const readMetadata = (file: File): Promise<FileWithMetadata> => {
+    const readMetadata = (file: File): Promise<FileWithMetadata> => {
       return new Promise((resolve) => {
         jsmediatags.read(file, {
             onSuccess: (tag) => {
@@ -191,7 +190,7 @@ export default function AudioDedupe() {
     });
   };
 
-  const verifyPermissions = async (handles: FileSystemDirectoryHandle[]): Promise<boolean> => {
+  const verifyPermissions = async (handles: (FileSystemDirectoryHandle | FileSystemFileHandle)[]): Promise<boolean> => {
     try {
       for (const handle of handles) {
         const permission = await handle.queryPermission({ mode: 'readwrite' });
@@ -212,8 +211,8 @@ export default function AudioDedupe() {
     }
   };
 
-   const handleAnalyze = async () => {
-    if (files.length === 0) {
+  const handleAnalyze = async () => {
+    if (appFiles.length === 0) {
       setError('Analiz edilecek dosya yok. Lütfen önce bir klasör seçin.');
       return;
     }
@@ -224,80 +223,28 @@ export default function AudioDedupe() {
     setError(null);
     setLoadingMessage('İzinler kontrol ediliyor...');
     
-    const parentHandles = Array.from(new Set(files.map(file => file.parentHandle)));
+    const parentHandles = Array.from(new Set(appFiles.map(file => file.parentHandle)));
     const permissionsGranted = await verifyPermissions(parentHandles);
-    if (!permissionsGranted || analysisCancellation.current) {
+    if (!permissionsGranted) {
       setViewState('files_selected');
       setLoadingMessage('');
       return;
     }
 
-    setLoadingMessage('Meta veriler okunuyor...');
+    setLoadingMessage('Meta veriler okunuyor ve benzerlik analizi yapılıyor...');
     setAnalysisStats(null);
     const startTime = performance.now();
 
-    const filesToRead: File[] = [];
-    const newFileObjects = new Map<string, File>();
-
     try {
-        const filesToProcess = files.filter(appFile => !fileObjects.has(appFile.path));
+        const allFilePaths = appFiles.map(f => f.path);
         
-        for (const appFile of filesToProcess) {
-            if (analysisCancellation.current) return;
-            // Her dosya okunmadan önce izni tekrar doğrula
-            const isGranted = await verifyPermissions([appFile.parentHandle]);
-            if (!isGranted) {
-                setViewState('files_selected');
-                setLoadingMessage('');
-                return;
-            }
-            const file = await appFile.handle.getFile();
-            filesToRead.push(file);
-            newFileObjects.set(appFile.path, file);
-        }
-
-        setFileObjects(prev => new Map([...prev, ...newFileObjects]));
-
-    } catch (e) {
+        await new Promise(resolve => setTimeout(resolve, 100)); // UI update
         if (analysisCancellation.current) return;
-        const errorMessage = e instanceof Error ? e.message : 'Dosya okuma sırasında beklenmedik bir hata oluştu.';
-        setError(`Dosyalara erişirken bir hata oluştu: ${errorMessage}. Lütfen klasör izinlerini kontrol edin.`);
-        toast({ title: "Dosya Erişim Hatası", description: errorMessage, variant: "destructive" });
-        setViewState('files_selected');
-        return;
-    }
-
-    const metadataPromises = filesToRead.map(file => readMetadata(file));
-    
-    let completed = 0;
-    metadataPromises.forEach(p => {
-        p.then(() => {
-            if (analysisCancellation.current) return;
-            completed++;
-            const progress = (completed / metadataPromises.length) * 50; 
-            setAnalysisProgress(progress);
-        });
-    });
-
-    try {
-        const allMetadata = await Promise.all(metadataPromises);
-        if (analysisCancellation.current) return;
-        
-        const newMetadataMap = new Map<string, FileWithMetadata>();
-        allMetadata.forEach(meta => newMetadataMap.set(meta.path, meta));
-        setFilesWithMetadata(prev => new Map([...prev, ...newMetadataMap]));
-
         setAnalysisProgress(50);
-        setLoadingMessage('Benzer dosyalar analiz ediliyor...');
-
-        const allFilePaths = files.map(f => f.path);
         
-        await new Promise(resolve => setTimeout(resolve, 100)); // UI update için
-        if (analysisCancellation.current) return;
-        setAnalysisProgress(75);
-
         const groups = findDuplicateGroupsLocally(allFilePaths, similarityThreshold);
         if (analysisCancellation.current) return;
+        setAnalysisProgress(75);
         
         const groupsWithSelection = groups
             .map((group, index) => ({
@@ -314,7 +261,7 @@ export default function AudioDedupe() {
         const endTime = performance.now();
         setAnalysisStats({
           duration: (endTime - startTime) / 1000,
-          scannedFiles: files.length,
+          scannedFiles: appFiles.length,
           foundGroups: groupsWithSelection.length,
         });
 
@@ -396,7 +343,7 @@ export default function AudioDedupe() {
 
   const handleDeleteSelected = async (groupsToDeleteFrom: DuplicateGroupWithSelection[]) => {
       const filesToDelete = new Map<string, AppFile>();
-      const allFilesMap = new Map(files.map(f => [f.path, f]));
+      const allFilesMap = new Map(appFiles.map(f => [f.path, f]));
 
       for (const group of groupsToDeleteFrom) {
           for (const path of group.selection) {
@@ -442,7 +389,7 @@ export default function AudioDedupe() {
           
           // Update state after deletion
           const deletedFilePaths = new Set(Array.from(filesToDelete.keys()));
-          setFiles(prev => prev.filter(f => !deletedFilePaths.has(f.path)));
+          setAppFiles(prev => prev.filter(f => !deletedFilePaths.has(f.path)));
           setDuplicateGroups(prev => 
               prev.map(g => ({
                   ...g,
@@ -450,11 +397,6 @@ export default function AudioDedupe() {
                   selection: new Set([...g.selection].filter(f => !deletedFilePaths.has(f)))
               })).filter(g => g.files.length > 1)
           );
-          setFileObjects(prev => {
-              const newMap = new Map(prev);
-              deletedFilePaths.forEach(path => newMap.delete(path));
-              return newMap;
-          });
           setFilesWithMetadata(prev => {
               const newMap = new Map(prev);
               deletedFilePaths.forEach(path => newMap.delete(path));
@@ -469,8 +411,7 @@ export default function AudioDedupe() {
   };
   
   const clearAllFiles = () => {
-    setFiles([]);
-    setFileObjects(new Map());
+    setAppFiles([]);
     setFilesWithMetadata(new Map());
     setDuplicateGroups([]);
     setError(null);
@@ -486,14 +427,14 @@ export default function AudioDedupe() {
 
   const selectedFoldersWithCounts = useMemo(() => {
     const folderMap = new Map<string, number>();
-    files.forEach(file => {
+    appFiles.forEach(file => {
       const path = file.basePath;
       folderMap.set(path, (folderMap.get(path) || 0) + 1);
     });
     return Array.from(folderMap.entries())
       .map(([path, count]) => ({ path, count }))
       .sort((a, b) => a.path.localeCompare(b.path));
-  }, [files]);
+  }, [appFiles]);
 
   const selectedFolders = useMemo(() => {
       return selectedFoldersWithCounts.map(f => f.path);
@@ -501,19 +442,16 @@ export default function AudioDedupe() {
 
 
   const removeFolder = useCallback((folderPathToRemove: string) => {
-      const newFiles = files.filter(file => file.basePath !== folderPathToRemove);
-      const pathsToRemove = new Set(files.filter(file => file.basePath === folderPathToRemove).map(f => f.path));
+      const newFiles = appFiles.filter(file => file.basePath !== folderPathToRemove);
+      const pathsToRemove = new Set(appFiles.filter(file => file.basePath === folderPathToRemove).map(f => f.path));
 
-      const newFileObjects = new Map(fileObjects);
       const newFilesWithMetadata = new Map(filesWithMetadata);
       
       pathsToRemove.forEach(path => {
-          newFileObjects.delete(path);
           newFilesWithMetadata.delete(path);
       });
 
-      setFiles(newFiles);
-      setFileObjects(newFileObjects);
+      setAppFiles(newFiles);
       setFilesWithMetadata(newFilesWithMetadata);
 
       setDuplicateGroups([]);
@@ -524,7 +462,7 @@ export default function AudioDedupe() {
       }
       
       toast({ title: 'Klasör kaldırıldı', description: `${folderPathToRemove} klasörü ve içindekiler listeden çıkarıldı.` });
-  }, [files, fileObjects, filesWithMetadata, toast]);
+  }, [appFiles, filesWithMetadata, toast]);
   
     const filteredDuplicateGroups = useMemo(() => {
     let filtered = duplicateGroups.filter(group => group.similarityScore >= resultsSimilarityFilter);
@@ -594,24 +532,29 @@ export default function AudioDedupe() {
                 URL.revokeObjectURL(currentlyPlaying.url);
             }
             
-            const file = fileObjects.get(filePath);
-            if (file) {
-                const url = URL.createObjectURL(file);
+            const appFile = appFiles.find(f => f.path === filePath);
+            if (!appFile) {
+                toast({ title: "Oynatma Hatası", description: "Dosya referansı bulunamadı.", variant: "destructive" });
+                return;
+            }
+
+            try {
+                // Just-in-time permission verification
+                const permissionGranted = await verifyPermissions([appFile.handle]);
+                if (!permissionGranted) return;
+
+                const fileBlob = await appFile.handle.getFile();
+                const url = URL.createObjectURL(fileBlob);
                 setCurrentlyPlaying({ path: filePath, url });
-            } else {
-                const appFile = files.find(f => f.path === filePath);
-                if(appFile) {
-                    try {
-                        const fileBlob = await appFile.handle.getFile();
-                        const newFileObjects = new Map(fileObjects);
-newFileObjects.set(filePath, fileBlob);
-                        setFileObjects(newFileObjects);
-                        const url = URL.createObjectURL(fileBlob);
-                        setCurrentlyPlaying({ path: filePath, url });
-                    } catch (e) {
-                         toast({ title: "Oynatma Hatası", description: "Dosya okunurken bir hata oluştu.", variant: "destructive" });
-                    }
+
+                if (!filesWithMetadata.has(filePath)) {
+                    readMetadata(fileBlob).then(meta => {
+                        setFilesWithMetadata(prev => new Map(prev).set(filePath, meta));
+                    });
                 }
+            } catch (e) {
+                 const errorMessage = e instanceof Error ? e.message : "Dosya okunurken bir hata oluştu.";
+                 toast({ title: "Oynatma Hatası", description: errorMessage, variant: "destructive" });
             }
         }
     };
@@ -680,41 +623,72 @@ newFileObjects.set(filePath, fileBlob);
         });
     };
 
-    const applySelectionStrategy = () => {
+    const applySelectionStrategy = async () => {
         if (selectionStrategy === 'none') return;
-    
-        const newGroups = duplicateGroups.map(group => {
-            const filesWithMetaData = group.files
-                .map(path => {
-                    const meta = filesWithMetadata.get(path) || { path, size: 0, bitrate: 0 };
+
+        setLoadingMessage("Strateji uygulanıyor, meta veriler okunuyor...");
+        setViewState('analyzing');
+        setAnalysisProgress(0);
+
+        try {
+            const pathsToRead = duplicateGroups.flatMap(g => g.files).filter(path => !filesWithMetadata.has(path));
+            const uniquePaths = Array.from(new Set(pathsToRead));
+            const appFilesToRead = uniquePaths.map(path => appFiles.find(f => f.path === path)).filter(Boolean) as AppFile[];
+            
+            let completed = 0;
+            const metadataPromises = appFilesToRead.map(async (appFile) => {
+                const permissionGranted = await verifyPermissions([appFile.handle]);
+                if (!permissionGranted) throw new Error(`Dosya okuma izni alınamadı: ${appFile.path}`);
+                const file = await appFile.handle.getFile();
+                const meta = await readMetadata(file);
+                completed++;
+                setAnalysisProgress((completed / appFilesToRead.length) * 100);
+                return meta;
+            });
+
+            const newMetadata = await Promise.all(metadataPromises);
+            const newMetadataMap = new Map<string, FileWithMetadata>(filesWithMetadata);
+            newMetadata.forEach(meta => newMetadataMap.set(meta.path, meta));
+            setFilesWithMetadata(newMetadataMap);
+
+            const newGroups = duplicateGroups.map(group => {
+                const filesWithMetaDataForGroup = group.files.map(path => {
+                    const meta = newMetadataMap.get(path) || { path, size: 0, bitrate: 0 };
                     return { ...meta, name: path.split('/').pop() || path };
                 });
-    
-            let fileToKeep: string;
-    
-            switch (selectionStrategy) {
-                case 'keep_highest_quality':
-                    filesWithMetaData.sort((a, b) => b.bitrate - a.bitrate || b.size - a.size);
-                    break;
-                case 'keep_lowest_quality':
-                     filesWithMetaData.sort((a, b) => a.bitrate - b.bitrate || a.size - b.size);
-                    break;
-                case 'keep_shortest_name':
-                    filesWithMetaData.sort((a, b) => a.name.length - b.name.length);
-                    break;
-                default:
-                    return group;
-            }
-            
-            fileToKeep = filesWithMetaData.length > 0 ? filesWithMetaData[0].path : '';
-            
-            const newSelection = new Set(group.files.filter(path => path !== fileToKeep));
-            
-            return { ...group, selection: newSelection };
-        });
-    
-        setDuplicateGroups(newGroups);
-        toast({ title: "Strateji Uygulandı", description: "Yinelenen dosyalar seçilen kurala göre işaretlendi." });
+
+                let fileToKeep: string;
+
+                switch (selectionStrategy) {
+                    case 'keep_highest_quality':
+                        filesWithMetaDataForGroup.sort((a, b) => b.bitrate - a.bitrate || b.size - a.size);
+                        break;
+                    case 'keep_lowest_quality':
+                        filesWithMetaDataForGroup.sort((a, b) => a.bitrate - b.bitrate || a.size - b.size);
+                        break;
+                    case 'keep_shortest_name':
+                        filesWithMetaDataForGroup.sort((a, b) => a.name.length - b.name.length);
+                        break;
+                    default:
+                        return group;
+                }
+                
+                fileToKeep = filesWithMetaDataForGroup.length > 0 ? filesWithMetaDataForGroup[0].path : '';
+                const newSelection = new Set(group.files.filter(path => path !== fileToKeep));
+                return { ...group, selection: newSelection };
+            });
+
+            setDuplicateGroups(newGroups);
+            toast({ title: "Strateji Uygulandı", description: "Yinelenen dosyalar seçilen kurala göre işaretlendi." });
+
+        } catch (e) {
+            const errorMessage = e instanceof Error ? e.message : "Strateji uygulanırken bir hata oluştu.";
+            toast({ title: "Hata", description: errorMessage, variant: "destructive" });
+        } finally {
+            setViewState('results');
+            setLoadingMessage("");
+            setAnalysisProgress(0);
+        }
     };
     
     const handleExportXLSX = () => {
@@ -780,7 +754,7 @@ newFileObjects.set(filePath, fileBlob);
                 <CardTitle>Analize Hazır Klasörler</CardTitle>
                 <CardDescription>
                     Aşağıda analize dahil edilecek klasörler listelenmiştir.
-                    Toplam {files.length} dosya bulundu. Analizi başlatmaya hazırsınız.
+                    Toplam {appFiles.length} dosya bulundu. Analizi başlatmaya hazırsınız.
                 </CardDescription>
             </CardHeader>
         </Card>
@@ -1042,7 +1016,7 @@ newFileObjects.set(filePath, fileBlob);
       return renderResultsView();
     }
     
-    if (viewState === 'files_selected' && files.length > 0) {
+    if (viewState === 'files_selected' && appFiles.length > 0) {
       return renderFileSelectionView();
     }
     
@@ -1079,7 +1053,7 @@ newFileObjects.set(filePath, fileBlob);
                         <p className="text-xs text-muted-foreground">Düşük değerler daha fazla kopya bulur.</p>
                       </div>
 
-                     <Button className="w-full" onClick={handleAnalyze} disabled={isPending || files.length === 0 || viewState === 'analyzing'}>
+                     <Button className="w-full" onClick={handleAnalyze} disabled={isPending || appFiles.length === 0 || viewState === 'analyzing'}>
                          {viewState === 'analyzing' ? <Loader2 className="animate-spin" /> : <FileScan />}
                          {viewState === 'analyzing' ? 'Analiz Ediliyor...' : 'Analizi Başlat'}
                      </Button>
@@ -1151,8 +1125,9 @@ newFileObjects.set(filePath, fileBlob);
                                     <SelectItem value="keep_shortest_name">En Kısa Dosya Adını Tut</SelectItem>
                                 </SelectContent>
                             </Select>
-                            <Button className="w-full" variant="outline" onClick={applySelectionStrategy} disabled={selectionStrategy === 'none'}>
-                                <FileJson className="mr-2" /> Stratejiyi Uygula
+                            <Button className="w-full" variant="outline" onClick={applySelectionStrategy} disabled={selectionStrategy === 'none' || viewState === 'analyzing'}>
+                                {viewState === 'analyzing' && selectionStrategy !== 'none' ? <Loader2 className="animate-spin" /> : <FileJson className="mr-2" />}
+                                Stratejiyi Uygula
                             </Button>
                             <p className="text-xs text-muted-foreground">Dosya kalitesi, bitrate ve dosya boyutuna göre belirlenir.</p>
                         </div>
@@ -1232,7 +1207,7 @@ newFileObjects.set(filePath, fileBlob);
                     Ana Klasör
                 </Button>
             </div>
-            <Button variant="ghost" className="text-destructive hover:text-destructive w-full" onClick={clearAllFiles} disabled={files.length === 0 || isPending || viewState === 'analyzing'}>
+            <Button variant="ghost" className="text-destructive hover:text-destructive w-full" onClick={clearAllFiles} disabled={appFiles.length === 0 || isPending || viewState === 'analyzing'}>
                 <FileX2 />
                 Listeyi Temizle
             </Button>
@@ -1299,3 +1274,5 @@ newFileObjects.set(filePath, fileBlob);
     </SidebarProvider>
   );
 }
+
+    
