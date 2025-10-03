@@ -191,6 +191,29 @@ export default function AudioDedupe() {
     });
   };
 
+  const verifyPermissions = async (): Promise<boolean> => {
+    const parentHandles = new Set<FileSystemDirectoryHandle>();
+    files.forEach(file => parentHandles.add(file.parentHandle));
+    
+    try {
+      for (const handle of parentHandles) {
+        const permission = await handle.queryPermission({ mode: 'readwrite' });
+        if (permission !== 'granted') {
+          const request = await handle.requestPermission({ mode: 'readwrite' });
+          if (request !== 'granted') {
+            throw new Error("Dosyalara erişmek için gerekli izin verilmedi.");
+          }
+        }
+      }
+      return true;
+    } catch(e) {
+      const errorMessage = e instanceof Error ? e.message : "Bilinmeyen bir hata oluştu.";
+      setError(`İzin hatası: ${errorMessage}`);
+      toast({ title: "İzin Hatası", description: errorMessage, variant: "destructive" });
+      return false;
+    }
+  };
+
    const handleAnalyze = async () => {
     if (files.length === 0) {
       setError('Analiz edilecek dosya yok. Lütfen önce bir klasör seçin.');
@@ -201,6 +224,14 @@ export default function AudioDedupe() {
     setViewState('analyzing');
     setAnalysisProgress(0);
     setError(null);
+    setLoadingMessage('İzinler kontrol ediliyor...');
+    
+    const permissionsGranted = await verifyPermissions();
+    if (!permissionsGranted || analysisCancellation.current) {
+      setViewState('files_selected');
+      return;
+    }
+
     setLoadingMessage('Meta veriler okunuyor...');
     setAnalysisStats(null);
     const startTime = performance.now();
@@ -410,23 +441,23 @@ export default function AudioDedupe() {
           });
           
           // Update state after deletion
-          const remainingFilePaths = new Set(Array.from(filesToDelete.keys()));
-          setFiles(prev => prev.filter(f => !remainingFilePaths.has(f.path)));
+          const deletedFilePaths = new Set(Array.from(filesToDelete.keys()));
+          setFiles(prev => prev.filter(f => !deletedFilePaths.has(f.path)));
           setDuplicateGroups(prev => 
               prev.map(g => ({
                   ...g,
-                  files: g.files.filter(f => !remainingFilePaths.has(f)),
-                  selection: new Set([...g.selection].filter(f => !remainingFilePaths.has(f)))
+                  files: g.files.filter(f => !deletedFilePaths.has(f)),
+                  selection: new Set([...g.selection].filter(f => !deletedFilePaths.has(f)))
               })).filter(g => g.files.length > 1)
           );
           setFileObjects(prev => {
               const newMap = new Map(prev);
-              remainingFilePaths.forEach(path => newMap.delete(path));
+              deletedFilePaths.forEach(path => newMap.delete(path));
               return newMap;
           });
           setFilesWithMetadata(prev => {
               const newMap = new Map(prev);
-              remainingFilePaths.forEach(path => newMap.delete(path));
+              deletedFilePaths.forEach(path => newMap.delete(path));
               return newMap;
           });
 
@@ -709,7 +740,7 @@ export default function AudioDedupe() {
         // Dosya adı oluşturma
         const date = new Date().toISOString().split('T')[0];
         const mainFolderName = selectedFolders[0]?.split('/')[0] || 'analiz';
-        const fileName = `${date}-${mainFolderName}.xlsx`;
+        const fileName = `${mainFolderName}-${date}.xlsx`;
 
         XLSX.writeFile(workbook, fileName);
         toast({ title: "Rapor İndirildi", description: `${fileName} başarıyla oluşturuldu.` });
@@ -1268,3 +1299,5 @@ export default function AudioDedupe() {
     </SidebarProvider>
   );
 }
+
+    
